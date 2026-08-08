@@ -1,0 +1,90 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+pip-wheel-metadata/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+
+# ── Test / sample images (not for version control) ────────────────────────────
+API/image*.png
+API/image*.jpg
+API/image*.jpeg
+API/image*.bmp
+API/image*.tiff
+API/image*.tif
+API/output/
+API/results/
+
+# ── Flutter / Dart ────────────────────────────────────────────────────────────
+APP/.dart_tool/
+APP/.flutter-plugins
+APP/.flutter-plugins-dependencies
+APP/.pub-cache/
+APP/.pub/
+APP/build/
+APP/coverage/
+APP/**/.last_build_id
+APP/**/doc/api/
+
+# ── IntelliJ / Android Studio ────────────────────────────────────────────────
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# ── Android build artifacts ───────────────────────────────────────────────────
+APP/android/app/debug/
+APP/android/app/profile/
+APP/android/app/release/
+APP/android/.gradle/
+APP/android/local.properties
+APP/android/key.properties
+APP/android/*.keystore
+APP/android/*.jks
+
+# ── iOS build artifacts ───────────────────────────────────────────────────────
+APP/ios/Pods/
+APP/ios/.symlinks/
+APP/ios/Flutter/Flutter.framework/
+APP/ios/Flutter/Flutter.podspec
+APP/ios/Flutter/Generated.xcconfig
+APP/ios/Flutter/app.flx
+APP/ios/Flutter/app.zip
+APP/ios/Flutter/flutter_assets/
+APP/ios/Flutter/.last_build_id
+APP/ios/Runner/GeneratedPluginRegistrant.*
+
+# ── macOS ─────────────────────────────────────────────────────────────────────
+APP/macos/Flutter/GeneratedPluginRegistrant.swift
+APP/macos/Flutter/Flutter-Debug.xcconfig
+APP/macos/Flutter/Flutter-Release.xcconfig
+
+# ── Misc ──────────────────────────────────────────────────────────────────────
+*.log
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini
+.env
+.env.*
+secrets.py
+*.pem
+*.p12
+*.keystore
+*.jks
