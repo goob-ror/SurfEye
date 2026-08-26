@@ -1,16 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:surfeye_app/router.dart';
+import 'package:surfeye_app/services/orientation_manager.dart';
 import 'package:surfeye_app/theme/app_theme.dart';
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Lock to portrait orientation
-  SystemChrome.setPreferredOrientations([
-    DeviceOrientation.portraitUp,
-    DeviceOrientation.portraitDown,
-  ]);
+  // Read system auto-rotate setting and apply portrait orientation.
+  // Also registers a lifecycle observer to re-apply on app resume.
+  await OrientationManager.init();
 
   // Edge-to-edge immersive display
   SystemChrome.setSystemUIOverlayStyle(

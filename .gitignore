@@ -88,3 +88,4 @@ secrets.py
 *.p12
 *.keystore
 *.jks
+.vscode

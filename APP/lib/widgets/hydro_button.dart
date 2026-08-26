@@ -25,9 +25,9 @@ class HydroButton extends StatelessWidget {
           vertical: small ? 10 : 14,
         ),
         decoration: BoxDecoration(
-          gradient: HydroColors.hydroGradient,
+          gradient: NatureColors.natureGradient,
           borderRadius: BorderRadius.circular(12),
-          boxShadow: HydroColors.hydroGlow,
+          boxShadow: NatureColors.natureGlow,
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,

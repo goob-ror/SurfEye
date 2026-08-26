@@ -8,24 +8,24 @@ class BottomNav extends StatelessWidget {
   final bool dark;
 
   static const _items = [
-    _NavItem(icon: Icons.home_rounded, label: 'Home', path: '/'),
-    _NavItem(icon: Icons.camera_alt_rounded, label: 'Capture', path: '/camera'),
-    _NavItem(icon: Icons.assignment_rounded, label: 'Results', path: '/results'),
+    _NavItem(icon: Icons.home_rounded, label: 'Beranda', path: '/'),
+    _NavItem(icon: Icons.camera_alt_rounded, label: 'Kamera', path: '/camera'),
+    _NavItem(icon: Icons.assignment_rounded, label: 'Hasil', path: '/results'),
   ];
 
   @override
   Widget build(BuildContext context) {
     final location = GoRouterState.of(context).uri.toString();
     final bg = dark
-        ? HydroColors.foreground.withValues(alpha: 0.9)
-        : HydroColors.card.withValues(alpha: 0.9);
+        ? NatureColors.foreground.withValues(alpha: 0.9)
+        : NatureColors.card.withValues(alpha: 0.9);
 
     return Container(
       decoration: BoxDecoration(
         color: bg,
         border: Border(
           top: BorderSide(
-            color: (dark ? Colors.white : HydroColors.border).withValues(alpha: 0.15),
+            color: (dark ? Colors.white : NatureColors.border).withValues(alpha: 0.15),
           ),
         ),
       ),
@@ -69,9 +69,9 @@ class _NavButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final activeColor = HydroColors.accent;
+    final activeColor = NatureColors.accent;
     final inactiveColor =
-        dark ? Colors.white.withValues(alpha: 0.5) : HydroColors.mutedForeground;
+        dark ? Colors.white.withValues(alpha: 0.5) : NatureColors.mutedForeground;
 
     return GestureDetector(
       onTap: () => context.go(item.path),
@@ -89,7 +89,7 @@ class _NavButton extends StatelessWidget {
               width: isActive ? 28 : 0,
               margin: const EdgeInsets.only(bottom: 4),
               decoration: BoxDecoration(
-                gradient: isActive ? HydroColors.hydroGradient : null,
+                gradient: isActive ? NatureColors.natureGradient : null,
                 borderRadius: BorderRadius.circular(2),
               ),
             ),

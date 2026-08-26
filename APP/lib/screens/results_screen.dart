@@ -4,286 +4,232 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:surfeye_app/models/measurement.dart';
 import 'package:surfeye_app/theme/app_theme.dart';
 import 'package:surfeye_app/widgets/bottom_nav.dart';
 
-class ResultsScreen extends StatelessWidget {
+class ResultsScreen extends StatefulWidget {
   const ResultsScreen({
     super.key,
-    this.imagePath,
-    required this.angle,
+    this.measurement,
+    this.imagePaths = const [],
+    this.angle,
   });
 
-  final String? imagePath;
-  final double angle;
+  /// From history — full measurement object
+  final Measurement? measurement;
+  /// From camera — individual fields (legacy path)
+  final List<String> imagePaths;
+  final double? angle;
 
-  String get _category {
-    if (angle < 10) return 'Super-Hydrophilic';
-    if (angle < 90) return 'Hydrophilic';
-    if (angle < 150) return 'Hydrophobic';
-    return 'Super-Hydrophobic';
+  @override
+  State<ResultsScreen> createState() => _ResultsScreenState();
+}
+
+class _ResultsScreenState extends State<ResultsScreen> {
+  late final PageController _pageController;
+  int _currentPage = 0;
+
+  // Resolve source: measurement takes priority
+  Measurement? get _m => widget.measurement;
+  double get _angle => (_m?.angle ?? widget.angle ?? 0.0).clamp(0, 180).toDouble();
+  List<String> get _imagePaths {
+    if (_m?.imagePath != null) return [_m!.imagePath!];
+    return widget.imagePaths;
   }
 
-  Color _categoryColor(BuildContext context) {
-    if (angle < 10) return HydroColors.accent;
-    if (angle < 90) return HydroColors.secondary;
-    if (angle < 150) return HydroColors.primary;
-    return HydroColors.foreground;
+  String get _formattedAngle => _angle.toStringAsFixed(2);
+
+  String get _category {
+    if (_angle < 10) return 'Super-Hidrofilik';
+    if (_angle < 90) return 'Hidrofilik';
+    if (_angle < 150) return 'Hidrofobik';
+    return 'Super-Hidrofobik';
+  }
+
+  Color get _categoryColor {
+    if (_angle < 10) return NatureColors.accent;
+    if (_angle < 90) return NatureColors.secondary;
+    if (_angle < 150) return NatureColors.primary;
+    return NatureColors.foreground;
   }
 
   String get _description {
-    if (angle < 10) return 'The surface exhibits extreme wettability. Water spreads almost completely flat.';
-    if (angle < 90) return 'The surface is wettable. Water tends to spread and adhere to the surface.';
-    if (angle < 150) return 'The surface repels water. Droplets bead up and can roll off easily.';
-    return 'The surface exhibits extreme water repulsion, similar to a lotus leaf effect.';
+    if (_angle < 10) return 'Permukaan menunjukkan kebasahan ekstrem. Air menyebar hampir sepenuhnya rata.';
+    if (_angle < 90) return 'Permukaan dapat basah. Air cenderung menyebar dan menempel pada permukaan.';
+    if (_angle < 150) return 'Permukaan menolak air. Tetesan membentuk butiran dan dapat menggelinding dengan mudah.';
+    return 'Permukaan menunjukkan penolakan air yang ekstrem, mirip dengan efek daun teratai.';
+  }
+
+  bool get _isEmpty => _m == null && (widget.angle == null || widget.angle == 0.0);
+
+  @override
+  void initState() {
+    super.initState();
+    _pageController = PageController();
+  }
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  void _prevImage() {
+    if (_currentPage > 0) _pageController.previousPage(duration: const Duration(milliseconds: 300), curve: Curves.easeInOut);
+  }
+
+  void _nextImage() {
+    if (_currentPage < _imagePaths.length - 1) _pageController.nextPage(duration: const Duration(milliseconds: 300), curve: Curves.easeInOut);
   }
 
   @override
   Widget build(BuildContext context) {
-    final catColor = _categoryColor(context);
+    final catColor = _categoryColor;
+    final multiImage = _imagePaths.length > 1;
 
     return Scaffold(
-      backgroundColor: HydroColors.background,
+      backgroundColor: NatureColors.background,
       body: Column(
         children: [
-          // ── Header ────────────────────────────────────────────────────────
+          // ── Header ──────────────────────────────────────────────────────
           SafeArea(
             bottom: false,
             child: Padding(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               child: Row(
                 children: [
-                  _IconBtn(
-                    icon: Icons.arrow_back_rounded,
-                    onTap: () => context.go('/'),
-                  ),
+                  _IconBtn(icon: Icons.arrow_back_rounded, onTap: () => context.go('/')),
                   const Spacer(),
-                  Text(
-                    'Results',
-                    style: GoogleFonts.outfit(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w600,
-                      color: HydroColors.foreground,
+                  Text('Hasil', style: GoogleFonts.outfit(fontSize: 18, fontWeight: FontWeight.w600, color: NatureColors.foreground)),
+                  const Spacer(),
+                  Row(children: [
+                    _IconBtn(
+                      icon: Icons.share_rounded,
+                      onTap: () async {
+                        final path = _imagePaths.isNotEmpty ? _imagePaths[_currentPage] : null;
+                        if (path != null) {
+                          await Share.shareXFiles([XFile(path)], text: 'Sudut kontak: $_formattedAngle° – $_category');
+                        } else {
+                          await Share.share('Sudut kontak: $_formattedAngle° – $_category');
+                        }
+                      },
                     ),
-                  ),
-                  const Spacer(),
-                  Row(
-                    children: [
-                      _IconBtn(
-                        icon: Icons.share_rounded,
-                        onTap: () async {
-                          if (imagePath != null) {
-                            await Share.shareXFiles(
-                              [XFile(imagePath!)],
-                              text: 'Contact angle: $angle° – $_category',
-                            );
-                          } else {
-                            await Share.share(
-                                'Contact angle: $angle° – $_category');
-                          }
-                        },
-                      ),
-                      const SizedBox(width: 8),
-                      _IconBtn(
-                        icon: Icons.download_rounded,
-                        onTap: () {},
-                      ),
-                    ],
-                  ),
+                    const SizedBox(width: 8),
+                    _IconBtn(icon: Icons.download_rounded, onTap: () {}),
+                  ]),
                 ],
               ),
             ),
           ),
 
-          // ── Scrollable content ────────────────────────────────────────────
+          // ── Scrollable content ───────────────────────────────────────────
           Expanded(
             child: SingleChildScrollView(
-              padding:
-                  const EdgeInsets.fromLTRB(20, 8, 20, 100),
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 100),
               child: Column(
                 children: [
-                  // Image with CV overlay
-                  _ImageCard(imagePath: imagePath, angle: angle)
+                  // ── Image gallery / placeholder ──────────────────────────
+                  _ImageGallery(
+                    imagePaths: _imagePaths,
+                    pageController: _pageController,
+                    currentPage: _currentPage,
+                    onPageChanged: (i) => setState(() => _currentPage = i),
+                    onPrev: multiImage ? _prevImage : null,
+                    onNext: multiImage ? _nextImage : null,
+                  )
                       .animate()
                       .fadeIn(duration: 400.ms)
-                      .scale(
-                          begin: const Offset(0.95, 0.95),
-                          duration: 400.ms,
-                          curve: Curves.easeOut),
+                      .scale(begin: const Offset(0.95, 0.95), duration: 400.ms, curve: Curves.easeOut),
 
                   const SizedBox(height: 16),
 
-                  // Contact angle card
+                  // ── Contact angle card ───────────────────────────────────
                   _DataCard(
                     delay: 200,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'CONTACT ANGLE',
-                          style: GoogleFonts.inter(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w500,
-                            color: HydroColors.mutedForeground,
-                            letterSpacing: 1.2,
-                          ),
-                        ),
-                        const SizedBox(height: 6),
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: [
-                            Text(
-                              '$angle',
-                              style: GoogleFonts.outfit(
-                                fontSize: 52,
-                                fontWeight: FontWeight.w700,
-                                color: HydroColors.cardForeground,
-                                height: 1,
-                              ),
-                            ),
-                            Padding(
-                              padding: const EdgeInsets.only(bottom: 6),
-                              child: Text(
-                                '°',
-                                style: GoogleFonts.outfit(
-                                  fontSize: 28,
-                                  color: HydroColors.mutedForeground,
+                    child: _isEmpty
+                        ? _EmptyCardContent(label: 'SUDUT KONTAK')
+                        : Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('SUDUT KONTAK',
+                                  style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.w500, color: NatureColors.mutedForeground, letterSpacing: 1.2)),
+                              const SizedBox(height: 6),
+                              Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                                Text(_formattedAngle,
+                                    style: GoogleFonts.outfit(fontSize: 52, fontWeight: FontWeight.w700, color: NatureColors.cardForeground, height: 1)),
+                                Padding(
+                                  padding: const EdgeInsets.only(bottom: 6),
+                                  child: Text('°', style: GoogleFonts.outfit(fontSize: 28, color: NatureColors.mutedForeground)),
                                 ),
+                              ]),
+                              const SizedBox(height: 10),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                                decoration: BoxDecoration(
+                                  color: catColor.withValues(alpha: 0.15),
+                                  borderRadius: BorderRadius.circular(20),
+                                ),
+                                child: Text(_category,
+                                    style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.w600, color: catColor)),
                               ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 10),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 12, vertical: 5),
-                          decoration: BoxDecoration(
-                            color: catColor.withValues(alpha: 0.15),
-                            borderRadius: BorderRadius.circular(20),
+                            ],
                           ),
-                          child: Text(
-                            _category,
-                            style: GoogleFonts.inter(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              color: catColor,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
                   ),
 
                   const SizedBox(height: 12),
 
-                  // Analysis card
+                  // ── Analysis card ────────────────────────────────────────
                   _DataCard(
                     delay: 300,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'ANALYSIS',
-                          style: GoogleFonts.inter(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w500,
-                            color: HydroColors.mutedForeground,
-                            letterSpacing: 1.2,
+                    child: _isEmpty
+                        ? _EmptyCardContent(label: 'ANALISIS')
+                        : Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('ANALISIS',
+                                  style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.w500, color: NatureColors.mutedForeground, letterSpacing: 1.2)),
+                              const SizedBox(height: 8),
+                              Text(_description,
+                                  style: GoogleFonts.inter(fontSize: 13, color: NatureColors.cardForeground, height: 1.6)),
+                            ],
                           ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          _description,
-                          style: GoogleFonts.inter(
-                            fontSize: 13,
-                            color: HydroColors.cardForeground,
-                            height: 1.6,
-                          ),
-                        ),
-                      ],
-                    ),
                   ),
 
                   const SizedBox(height: 12),
 
-                  // Measurement details card
+                  // ── Measurement details card ─────────────────────────────
                   _DataCard(
                     delay: 400,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'MEASUREMENT DETAILS',
-                          style: GoogleFonts.inter(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w500,
-                            color: HydroColors.mutedForeground,
-                            letterSpacing: 1.2,
+                    child: _isEmpty
+                        ? _EmptyCardContent(label: 'DETAIL PENGUKURAN')
+                        : Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('DETAIL PENGUKURAN',
+                                  style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.w500, color: NatureColors.mutedForeground, letterSpacing: 1.2)),
+                              const SizedBox(height: 12),
+                              ..._buildDetailRows(),
+                            ],
                           ),
-                        ),
-                        const SizedBox(height: 12),
-                        ...[
-                          ['Left Angle', '${(angle - 1.2).toStringAsFixed(1)}°'],
-                          ['Right Angle', '${(angle + 1.2).toStringAsFixed(1)}°'],
-                          ['Asymmetry', '2.4°'],
-                          ['Droplet Width', '2.34 mm'],
-                          ['Droplet Height', '1.12 mm'],
-                        ].map(
-                          (row) => Padding(
-                            padding: const EdgeInsets.only(bottom: 10),
-                            child: Row(
-                              mainAxisAlignment:
-                                  MainAxisAlignment.spaceBetween,
-                              children: [
-                                Text(
-                                  row[0],
-                                  style: GoogleFonts.inter(
-                                    fontSize: 13,
-                                    color: HydroColors.mutedForeground,
-                                  ),
-                                ),
-                                Text(
-                                  row[1],
-                                  style: GoogleFonts.inter(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w500,
-                                    color: HydroColors.cardForeground,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
                   ),
 
                   const SizedBox(height: 12),
 
-                  // Disclaimer
+                  // ── Disclaimer ───────────────────────────────────────────
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Icon(Icons.warning_amber_rounded,
-                          size: 16,
-                          color: HydroColors.mutedForeground),
+                      const Icon(Icons.warning_amber_rounded, size: 16, color: NatureColors.mutedForeground),
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          'Results are estimates based on image analysis. For precise measurements, use calibrated equipment.',
-                          style: GoogleFonts.inter(
-                            fontSize: 11,
-                            color: HydroColors.mutedForeground,
-                            height: 1.5,
-                          ),
+                          'Hasil ini adalah perkiraan berdasarkan analisis gambar. Untuk pengukuran yang presisi, gunakan peralatan yang dikalibrasi.',
+                          style: GoogleFonts.inter(fontSize: 11, color: NatureColors.mutedForeground, height: 1.5),
                         ),
                       ),
                     ],
-                  )
-                      .animate()
-                      .fadeIn(delay: 500.ms, duration: 400.ms)
-                      .slideY(begin: 0.1, end: 0, delay: 500.ms),
+                  ).animate().fadeIn(delay: 500.ms, duration: 400.ms).slideY(begin: 0.1, end: 0, delay: 500.ms),
                 ],
               ),
             ),
@@ -293,39 +239,185 @@ class ResultsScreen extends StatelessWidget {
       bottomNavigationBar: const BottomNav(),
     );
   }
+
+  List<Widget> _buildDetailRows() {
+    final rows = <List<String>>[];
+
+    // Use real data from measurement if available, else fallback estimates
+    final leftA = _m?.leftAngle ?? (_angle - 1.2);
+    final rightA = _m?.rightAngle ?? (_angle + 1.2);
+    final asymmetry = (rightA - leftA).abs();
+    final method = _m?.method ?? 'young_laplace';
+    final bond = _m?.bondNumber;
+    final widthPx = _m?.dropletWidthPx;
+    final heightPx = _m?.dropletHeightPx;
+    final rms = _m?.fitResidualRms;
+
+    rows.add(['Sudut Kiri', '${leftA.toStringAsFixed(2)}°']);
+    rows.add(['Sudut Kanan', '${rightA.toStringAsFixed(2)}°']);
+    rows.add(['Asimetri', '${asymmetry.toStringAsFixed(2)}°']);
+    rows.add(['Metode', method == 'young_laplace' ? 'Young-Laplace' : 'Circle Fit']);
+    if (bond != null) rows.add(['Bond Number', bond.toStringAsFixed(4)]);
+    if (widthPx != null) rows.add(['Lebar Tetesan', '${widthPx.toStringAsFixed(1)} px']);
+    if (heightPx != null) rows.add(['Tinggi Tetesan', '${heightPx.toStringAsFixed(1)} px']);
+    if (rms != null) rows.add(['RMS Residual', '${rms.toStringAsFixed(2)} px']);
+    if (_m?.timestamp != null) {
+      final ts = _m!.timestamp;
+      rows.add(['Waktu', '${ts.day}/${ts.month}/${ts.year} ${ts.hour.toString().padLeft(2,'0')}:${ts.minute.toString().padLeft(2,'0')}']);
+    }
+
+    return rows.map((row) => Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(row[0], style: GoogleFonts.inter(fontSize: 13, color: NatureColors.mutedForeground)),
+          Text(row[1], style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.w500, color: NatureColors.cardForeground)),
+        ],
+      ),
+    )).toList();
+  }
 }
 
-// ── Image card with SVG-style CV overlay ─────────────────────────────────────
-class _ImageCard extends StatelessWidget {
-  const _ImageCard({this.imagePath, required this.angle});
-
-  final String? imagePath;
-  final double angle;
+// ── Empty card placeholder ─────────────────────────────────────────────────────
+class _EmptyCardContent extends StatelessWidget {
+  const _EmptyCardContent({required this.label});
+  final String label;
 
   @override
   Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.w500, color: NatureColors.mutedForeground, letterSpacing: 1.2)),
+        const SizedBox(height: 16),
+        Container(
+          height: 40,
+          decoration: BoxDecoration(
+            color: NatureColors.surface,
+            borderRadius: BorderRadius.circular(8),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Container(
+          height: 20,
+          width: 120,
+          decoration: BoxDecoration(color: NatureColors.surface, borderRadius: BorderRadius.circular(6)),
+        ),
+      ],
+    );
+  }
+}
+
+// ── Image gallery ──────────────────────────────────────────────────────────────
+class _ImageGallery extends StatelessWidget {
+  const _ImageGallery({
+    required this.imagePaths,
+    required this.pageController,
+    required this.currentPage,
+    required this.onPageChanged,
+    this.onPrev,
+    this.onNext,
+  });
+
+  final List<String> imagePaths;
+  final PageController pageController;
+  final int currentPage;
+  final ValueChanged<int> onPageChanged;
+  final VoidCallback? onPrev;
+  final VoidCallback? onNext;
+
+  @override
+  Widget build(BuildContext context) {
+    final hasImages = imagePaths.isNotEmpty;
+    final multiImage = imagePaths.length > 1;
+
     return ClipRRect(
       borderRadius: BorderRadius.circular(20),
       child: AspectRatio(
-        aspectRatio: 16 / 9,
+        aspectRatio: 4 / 3,
         child: Stack(
           fit: StackFit.expand,
           children: [
-            // Image or placeholder
-            if (imagePath != null)
-              Image.file(File(imagePath!), fit: BoxFit.cover)
+            if (hasImages)
+              PageView.builder(
+                controller: pageController,
+                itemCount: imagePaths.length,
+                onPageChanged: onPageChanged,
+                itemBuilder: (context, i) {
+                  return Image.file(
+                    File(imagePaths[i]),
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, _, _) => const _Placeholder(),
+                  );
+                },
+              )
             else
-              Container(
-                color: HydroColors.foreground.withValues(alpha: 0.05),
-                child: const Center(
-                  child: Icon(Icons.water_drop_outlined,
-                      size: 64,
-                      color: HydroColors.mutedForeground),
+              const _Placeholder(),
+
+            if (multiImage) ...[
+              Positioned(
+                left: 10, top: 0, bottom: 0,
+                child: Center(
+                  child: AnimatedOpacity(
+                    opacity: currentPage > 0 ? 1.0 : 0.3,
+                    duration: const Duration(milliseconds: 200),
+                    child: GestureDetector(
+                      onTap: onPrev,
+                      child: Container(
+                        width: 36, height: 36,
+                        decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.45), shape: BoxShape.circle),
+                        child: const Icon(Icons.chevron_left_rounded, color: Colors.white, size: 24),
+                      ),
+                    ),
+                  ),
                 ),
               ),
-
-            // CV overlay (mirrors the SVG from the web app)
-            CustomPaint(painter: _CVOverlayPainter(angle: angle)),
+              Positioned(
+                right: 10, top: 0, bottom: 0,
+                child: Center(
+                  child: AnimatedOpacity(
+                    opacity: currentPage < imagePaths.length - 1 ? 1.0 : 0.3,
+                    duration: const Duration(milliseconds: 200),
+                    child: GestureDetector(
+                      onTap: onNext,
+                      child: Container(
+                        width: 36, height: 36,
+                        decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.45), shape: BoxShape.circle),
+                        child: const Icon(Icons.chevron_right_rounded, color: Colors.white, size: 24),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              Positioned(
+                bottom: 12, left: 0, right: 0,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: List.generate(imagePaths.length, (i) {
+                    final active = i == currentPage;
+                    return AnimatedContainer(
+                      duration: const Duration(milliseconds: 250),
+                      margin: const EdgeInsets.symmetric(horizontal: 3),
+                      width: active ? 18 : 6, height: 6,
+                      decoration: BoxDecoration(
+                        color: active ? Colors.white : Colors.white.withValues(alpha: 0.45),
+                        borderRadius: BorderRadius.circular(3),
+                      ),
+                    );
+                  }),
+                ),
+              ),
+              Positioned(
+                top: 10, right: 10,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.5), borderRadius: BorderRadius.circular(20)),
+                  child: Text('${currentPage + 1} / ${imagePaths.length}',
+                      style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w500)),
+                ),
+              ),
+            ],
           ],
         ),
       ),
@@ -333,104 +425,37 @@ class _ImageCard extends StatelessWidget {
   }
 }
 
-class _CVOverlayPainter extends CustomPainter {
-  const _CVOverlayPainter({required this.angle});
-  final double angle;
+// ── Placeholder ────────────────────────────────────────────────────────────────
+class _Placeholder extends StatelessWidget {
+  const _Placeholder();
 
   @override
-  void paint(Canvas canvas, Size size) {
-    final w = size.width;
-    final h = size.height;
-
-    // Scale factors (original viewBox 400×225)
-    final sx = w / 400;
-    final sy = h / 225;
-
-    final dropletPaint = Paint()
-      ..color = const Color(0xFF38BDF8)
-      ..strokeWidth = 2 * sx
-      ..style = PaintingStyle.stroke;
-    dropletPaint.strokeCap = StrokeCap.round;
-
-    final dashPaint = Paint()
-      ..color = const Color(0xFF38BDF8).withValues(alpha: 0.8)
-      ..strokeWidth = 1.5 * sx
-      ..style = PaintingStyle.stroke;
-
-    final anglePaint = Paint()
-      ..color = const Color(0xFFF59E0B)
-      ..strokeWidth = 1.5 * sx
-      ..style = PaintingStyle.stroke;
-
-    // Droplet ellipse (dashed)
-    final path = Path();
-    path.addOval(Rect.fromCenter(
-      center: Offset(200 * sx, 140 * sy),
-      width: 120 * sx,
-      height: 100 * sy,
-    ));
-    canvas.drawPath(_dashPath(path, 4 * sx, 2 * sx), dropletPaint);
-
-    // Surface line
-    canvas.drawLine(
-      Offset(100 * sx, 175 * sy),
-      Offset(300 * sx, 175 * sy),
-      dashPaint,
-    );
-
-    // Left tangent line
-    canvas.drawLine(
-      Offset(145 * sx, 170 * sy),
-      Offset(175 * sx, 120 * sy),
-      anglePaint,
-    );
-
-    // Right tangent line
-    canvas.drawLine(
-      Offset(255 * sx, 170 * sy),
-      Offset(225 * sx, 120 * sy),
-      anglePaint,
-    );
-
-    // Angle label
-    final textPainter = TextPainter(
-      text: TextSpan(
-        text: '$angle°',
-        style: TextStyle(
-          color: const Color(0xFFF59E0B),
-          fontSize: 11 * sx,
-          fontWeight: FontWeight.w600,
+  Widget build(BuildContext context) {
+    return Container(
+      color: NatureColors.surface,
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ClipOval(
+              child: Image.asset(
+                'assets/images/logopkm26.png',
+                width: 80, height: 80, fit: BoxFit.cover,
+                errorBuilder: (_, _, _) => const Icon(Icons.energy_savings_leaf, size: 64, color: NatureColors.mutedForeground),
+              ),
+            ),
+            const SizedBox(height: 10),
+            Text('Tidak ada gambar', style: TextStyle(fontSize: 12, color: NatureColors.mutedForeground)),
+          ],
         ),
       ),
-      textDirection: TextDirection.ltr,
-    )..layout();
-    textPainter.paint(canvas, Offset(150 * sx, 148 * sy));
+    );
   }
-
-  // Helper to draw a dashed path
-  Path _dashPath(Path source, double dashLen, double gapLen) {
-    final dest = Path();
-    for (final metric in source.computeMetrics()) {
-      double dist = 0;
-      while (dist < metric.length) {
-        dest.addPath(
-          metric.extractPath(dist, dist + dashLen),
-          Offset.zero,
-        );
-        dist += dashLen + gapLen;
-      }
-    }
-    return dest;
-  }
-
-  @override
-  bool shouldRepaint(covariant _CVOverlayPainter old) => old.angle != angle;
 }
 
-// ── Reusable animated data card ───────────────────────────────────────────────
+// ── Animated data card ─────────────────────────────────────────────────────────
 class _DataCard extends StatelessWidget {
   const _DataCard({required this.child, this.delay = 0});
-
   final Widget child;
   final int delay;
 
@@ -440,26 +465,21 @@ class _DataCard extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        color: HydroColors.card,
+        color: NatureColors.card,
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: HydroColors.border),
+        border: Border.all(color: NatureColors.border),
       ),
       child: child,
     )
         .animate()
         .fadeIn(delay: Duration(milliseconds: delay), duration: 400.ms)
-        .slideY(
-            begin: 0.1,
-            end: 0,
-            delay: Duration(milliseconds: delay),
-            duration: 400.ms);
+        .slideY(begin: 0.1, end: 0, delay: Duration(milliseconds: delay), duration: 400.ms);
   }
 }
 
-// ── Icon button ───────────────────────────────────────────────────────────────
+// ── Icon button ────────────────────────────────────────────────────────────────
 class _IconBtn extends StatelessWidget {
   const _IconBtn({required this.icon, required this.onTap});
-
   final IconData icon;
   final VoidCallback onTap;
 
@@ -468,13 +488,9 @@ class _IconBtn extends StatelessWidget {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        width: 40,
-        height: 40,
-        decoration: BoxDecoration(
-          color: HydroColors.muted,
-          shape: BoxShape.circle,
-        ),
-        child: Icon(icon, size: 18, color: HydroColors.foreground),
+        width: 40, height: 40,
+        decoration: BoxDecoration(color: NatureColors.muted, shape: BoxShape.circle),
+        child: Icon(icon, size: 18, color: NatureColors.foreground),
       ),
     );
   }

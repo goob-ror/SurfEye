@@ -3,30 +3,54 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:surfeye_app/models/measurement.dart';
+import 'package:surfeye_app/services/database_service.dart';
 import 'package:surfeye_app/theme/app_theme.dart';
 import 'package:surfeye_app/widgets/bottom_nav.dart';
 
-class HomeScreen extends StatelessWidget {
+class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  List<Measurement> _measurements = [];
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadMeasurements();
+  }
+
+  Future<void> _loadMeasurements() async {
+    final measurements = await DatabaseService.instance.getMeasurements();
+    setState(() {
+      _measurements = measurements;
+      _isLoading = false;
+    });
+  }
+
   Color _categoryColor(String category) {
-    if (category.contains('Super-Hydrophilic')) return HydroColors.accent;
-    if (category.contains('Hydrophilic')) return HydroColors.secondary;
-    if (category.contains('Hydrophobic')) return HydroColors.primary;
-    return HydroColors.mutedForeground;
+    if (category.contains('Super-Hidrofilik')) return NatureColors.accent;
+    if (category.contains('Hidrofilik')) return NatureColors.secondary;
+    if (category.contains('Hidrofobik')) return NatureColors.primary;
+    if (category.contains('Super-Hidrofobik')) return NatureColors.accent;
+    return NatureColors.mutedForeground;
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: HydroColors.background,
+      backgroundColor: NatureColors.background,
       body: Column(
         children: [
           // ── Gradient header ──────────────────────────────────────────────
           Container(
             width: double.infinity,
             decoration: const BoxDecoration(
-              gradient: HydroColors.hydroGradient,
+              gradient: NatureColors.natureGradient,
             ),
             padding: EdgeInsets.only(
               top: MediaQuery.of(context).padding.top + 16,
@@ -39,13 +63,17 @@ class HomeScreen extends StatelessWidget {
               children: [
                 Row(
                   children: [
-                    Image.asset(
-                      'assets/images/logopkm26.png',
-                      height: 28,
-                      errorBuilder: (_, _, _) => const Icon(
-                        Icons.water_drop,
-                        color: Colors.white,
-                        size: 28,
+                    ClipOval(
+                      child: Image.asset(
+                        'assets/images/logopkm26.png',
+                        height: 56,
+                        width: 56,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, _, _) => const Icon(
+                          Icons.energy_savings_leaf,
+                          color: Colors.white,
+                          size: 56,
+                        ),
                       ),
                     ),
                     const SizedBox(width: 10),
@@ -62,7 +90,7 @@ class HomeScreen extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  'Contact Angle Analyzer',
+                  'Penganalisis Sudut Kontak',
                   style: GoogleFonts.inter(
                     fontSize: 13,
                     color: Colors.white.withValues(alpha: 0.7),
@@ -90,12 +118,6 @@ class HomeScreen extends StatelessWidget {
                     child: _NewMeasurementCard(),
                   ),
 
-                  // Quick stats
-                  _QuickStats()
-                      .animate()
-                      .fadeIn(delay: 200.ms, duration: 400.ms)
-                      .slideY(begin: 0.15, end: 0, delay: 200.ms),
-
                   const SizedBox(height: 20),
 
                   // Recent tests heading
@@ -103,21 +125,21 @@ class HomeScreen extends StatelessWidget {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Text(
-                        'Recent Tests',
+                        'Tes Terbaru',
                         style: GoogleFonts.outfit(
                           fontSize: 16,
                           fontWeight: FontWeight.w600,
-                          color: HydroColors.foreground,
+                          color: NatureColors.foreground,
                         ),
                       ),
                       GestureDetector(
                         onTap: () {},
                         child: Text(
-                          'View All',
+                          'Lihat Semua',
                           style: GoogleFonts.inter(
                             fontSize: 12,
                             fontWeight: FontWeight.w500,
-                            color: HydroColors.accent,
+                            color: NatureColors.accent,
                           ),
                         ),
                       ),
@@ -128,25 +150,41 @@ class HomeScreen extends StatelessWidget {
 
                   const SizedBox(height: 12),
 
-                  // Recent test cards
-                  ...sampleMeasurements.asMap().entries.map((entry) {
-                    final i = entry.key;
-                    final test = entry.value;
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 10),
-                      child: _RecentTestCard(
-                        test: test,
-                        categoryColor: _categoryColor(test.category),
-                      )
-                          .animate()
-                          .fadeIn(delay: Duration(milliseconds: 400 + i * 100))
-                          .slideX(
-                            begin: -0.1,
-                            end: 0,
-                            delay: Duration(milliseconds: 400 + i * 100),
+                  if (_isLoading)
+                    const Center(child: CircularProgressIndicator())
+                  else if (_measurements.isEmpty)
+                    Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(20.0),
+                        child: Text(
+                          'Belum ada tes. Lakukan pengukuran!',
+                          style: GoogleFonts.inter(color: NatureColors.mutedForeground),
+                        ),
+                      ),
+                    )
+                  else
+                    // Recent test cards
+                    ..._measurements.asMap().entries.map((entry) {
+                      final i = entry.key;
+                      final test = entry.value;
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 10),
+                        child: GestureDetector(
+                          onTap: () => context.go('/results', extra: {'measurement': test}),
+                          child: _RecentTestCard(
+                            test: test,
+                            categoryColor: _categoryColor(test.category),
                           ),
-                    );
-                  }),
+                        )
+                            .animate()
+                            .fadeIn(delay: Duration(milliseconds: 400 + i * 100))
+                            .slideX(
+                              begin: -0.1,
+                              end: 0,
+                              delay: Duration(milliseconds: 400 + i * 100),
+                            ),
+                      );
+                    }),
                 ],
               ),
             ),
@@ -167,10 +205,10 @@ class _NewMeasurementCard extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.all(20),
         decoration: BoxDecoration(
-          color: HydroColors.card,
+          color: NatureColors.card,
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: HydroColors.border),
-          boxShadow: HydroColors.hydroGlow,
+          border: Border.all(color: NatureColors.border),
+          boxShadow: NatureColors.natureGlow,
         ),
         child: Row(
           children: [
@@ -184,7 +222,7 @@ class _NewMeasurementCard extends StatelessWidget {
                         width: 44,
                         height: 44,
                         decoration: BoxDecoration(
-                          gradient: HydroColors.hydroGradient,
+                          gradient: NatureColors.natureGradient,
                           borderRadius: BorderRadius.circular(12),
                         ),
                         child: const Icon(Icons.science_rounded,
@@ -192,21 +230,21 @@ class _NewMeasurementCard extends StatelessWidget {
                       ),
                       const SizedBox(width: 12),
                       Text(
-                        'New Measurement',
+                        'Pengukuran Baru',
                         style: GoogleFonts.outfit(
                           fontSize: 17,
                           fontWeight: FontWeight.w600,
-                          color: HydroColors.cardForeground,
+                          color: NatureColors.cardForeground,
                         ),
                       ),
                     ],
                   ),
                   const SizedBox(height: 10),
                   Text(
-                    'Capture a water droplet image to analyze its contact angle and surface wettability.',
+                    'Ambil gambar tetesan air untuk menganalisis sudut kontak dan kebasahan permukaan.',
                     style: GoogleFonts.inter(
                       fontSize: 13,
-                      color: HydroColors.mutedForeground,
+                      color: NatureColors.mutedForeground,
                       height: 1.5,
                     ),
                   ),
@@ -214,69 +252,14 @@ class _NewMeasurementCard extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 12),
-            Icon(Icons.arrow_forward_rounded,
-                color: HydroColors.accent, size: 20),
+            const Icon(Icons.arrow_forward_rounded,
+                color: NatureColors.accent, size: 20),
           ],
         ),
       )
           .animate()
           .fadeIn(delay: 100.ms, duration: 400.ms)
           .slideY(begin: 0.15, end: 0, delay: 100.ms),
-    );
-  }
-}
-
-// ── Quick Stats row ───────────────────────────────────────────────────────────
-class _QuickStats extends StatelessWidget {
-  static const _stats = [
-    {'label': 'Total Tests', 'value': '24', 'icon': Icons.bar_chart_rounded},
-    {'label': 'Avg Angle', 'value': '52.1°', 'icon': Icons.water_drop_rounded},
-    {'label': 'This Week', 'value': '7', 'icon': Icons.schedule_rounded},
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: (_stats).map((stat) {
-        return Expanded(
-          child: Container(
-            margin: EdgeInsets.only(
-              left: stat == _stats.first ? 0 : 6,
-              right: stat == _stats.last ? 0 : 6,
-            ),
-            padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
-            decoration: BoxDecoration(
-              color: HydroColors.card,
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: HydroColors.border),
-            ),
-            child: Column(
-              children: [
-                Icon(stat['icon'] as IconData,
-                    color: HydroColors.accent, size: 18),
-                const SizedBox(height: 6),
-                Text(
-                  stat['value'] as String,
-                  style: GoogleFonts.outfit(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
-                    color: HydroColors.cardForeground,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  stat['label'] as String,
-                  style: GoogleFonts.inter(
-                    fontSize: 10,
-                    color: HydroColors.mutedForeground,
-                  ),
-                  textAlign: TextAlign.center,
-                ),
-              ],
-            ),
-          ),
-        );
-      }).toList(),
     );
   }
 }
@@ -296,9 +279,9 @@ class _RecentTestCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: HydroColors.card,
+        color: NatureColors.card,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: HydroColors.border),
+        border: Border.all(color: NatureColors.border),
       ),
       child: Row(
         children: [
@@ -306,11 +289,11 @@ class _RecentTestCard extends StatelessWidget {
             width: 42,
             height: 42,
             decoration: BoxDecoration(
-              color: HydroColors.hydroSurface,
+              color: NatureColors.surface,
               borderRadius: BorderRadius.circular(10),
             ),
             child: const Icon(Icons.water_drop_rounded,
-                color: HydroColors.secondary, size: 20),
+                color: NatureColors.secondary, size: 20),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -322,7 +305,7 @@ class _RecentTestCard extends StatelessWidget {
                   style: GoogleFonts.inter(
                     fontSize: 13,
                     fontWeight: FontWeight.w500,
-                    color: HydroColors.cardForeground,
+                    color: NatureColors.cardForeground,
                   ),
                 ),
                 const SizedBox(height: 2),
@@ -330,7 +313,7 @@ class _RecentTestCard extends StatelessWidget {
                   test.timeAgo,
                   style: GoogleFonts.inter(
                     fontSize: 11,
-                    color: HydroColors.mutedForeground,
+                    color: NatureColors.mutedForeground,
                   ),
                 ),
               ],
@@ -340,11 +323,11 @@ class _RecentTestCard extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               Text(
-                '${test.angle}°',
+                '${test.formattedAngle}°',
                 style: GoogleFonts.outfit(
                   fontSize: 14,
                   fontWeight: FontWeight.w700,
-                  color: HydroColors.cardForeground,
+                  color: NatureColors.cardForeground,
                 ),
               ),
               const SizedBox(height: 2),

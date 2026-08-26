@@ -1,55 +1,48 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
-// ── Hydro colour tokens (mirrored from aqua-angle CSS variables) ──────────────
-class HydroColors {
-  HydroColors._();
+// ── Nature colour tokens (Green Theme) ──────────────
+class NatureColors {
+  NatureColors._();
 
-  // Primary  hsl(201 96% 32%)
-  static const primary = Color(0xFF0369A1);
-  // Secondary hsl(199 89% 48%)
-  static const secondary = Color(0xFF0EA5E9);
-  // Accent    hsl(199 89% 60%)
-  static const accent = Color(0xFF38BDF8);
+  // Primary
+  static const primary = Color(0xFF166534); // Green 800
+  // Secondary
+  static const secondary = Color(0xFF22C55E); // Green 500
+  // Accent
+  static const accent = Color(0xFF4ADE80); // Green 400
 
-  // Background hsl(210 40% 98%)
-  static const background = Color(0xFFF1F5F9);
-  // Foreground hsl(222 47% 11%)
-  static const foreground = Color(0xFF0F172A);
+  // Background
+  static const background = Color(0xFFF0FDF4); // Green 50
+  // Foreground
+  static const foreground = Color(0xFF14532D); // Green 900
 
   // Card
   static const card = Colors.white;
-  static const cardForeground = Color(0xFF0F172A);
+  static const cardForeground = Color(0xFF14532D);
 
   // Muted
-  static const muted = Color(0xFFE2E8F0);
-  static const mutedForeground = Color(0xFF64748B);
+  static const muted = Color(0xFFDCFCE7); // Green 100
+  static const mutedForeground = Color(0xFF166534);
 
   // Border
-  static const border = Color(0xFFE2E8F0);
+  static const border = Color(0xFFBBF7D0); // Green 200
 
-  // Hydro surface hsl(199 89% 97%)
-  static const hydroSurface = Color(0xFFE0F7FE);
-
-  // Dark variants
-  static const darkBackground = Color(0xFF070D1A);
-  static const darkCard = Color(0xFF0D1526);
-  static const darkBorder = Color(0xFF1E293B);
-  static const darkMuted = Color(0xFF1E293B);
-  static const darkMutedForeground = Color(0xFF94A3B8);
+  // Surface
+  static const surface = Color(0xFFF0FDF4);
 
   // Gradient
   static const gradientStart = primary;
   static const gradientEnd = accent;
 
-  static const LinearGradient hydroGradient = LinearGradient(
+  static const LinearGradient natureGradient = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
     colors: [gradientStart, gradientEnd],
   );
 
   // Glow shadow
-  static List<BoxShadow> get hydroGlow => [
+  static List<BoxShadow> get natureGlow => [
         BoxShadow(
           color: accent.withValues(alpha: 0.4),
           blurRadius: 32,
@@ -66,51 +59,51 @@ class AppTheme {
   static ThemeData get light {
     final base = ThemeData.light(useMaterial3: true);
     return base.copyWith(
-      scaffoldBackgroundColor: HydroColors.background,
+      scaffoldBackgroundColor: NatureColors.background,
       colorScheme: const ColorScheme.light(
-        primary: HydroColors.primary,
-        secondary: HydroColors.secondary,
-        tertiary: HydroColors.accent,
-        surface: HydroColors.card,
+        primary: NatureColors.primary,
+        secondary: NatureColors.secondary,
+        tertiary: NatureColors.accent,
+        surface: NatureColors.card,
         onPrimary: Colors.white,
         onSecondary: Colors.white,
-        onSurface: HydroColors.cardForeground,
-        outline: HydroColors.border,
+        onSurface: NatureColors.cardForeground,
+        outline: NatureColors.border,
       ),
-      textTheme: _buildTextTheme(HydroColors.foreground),
+      textTheme: _buildTextTheme(NatureColors.foreground),
       cardTheme: CardThemeData(
-        color: HydroColors.card,
+        color: NatureColors.card,
         elevation: 0,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(16),
-          side: const BorderSide(color: HydroColors.border),
+          side: const BorderSide(color: NatureColors.border),
         ),
       ),
       appBarTheme: AppBarTheme(
         backgroundColor: Colors.transparent,
         elevation: 0,
-        iconTheme: const IconThemeData(color: HydroColors.foreground),
+        iconTheme: const IconThemeData(color: NatureColors.foreground),
         titleTextStyle: GoogleFonts.outfit(
           fontSize: 18,
           fontWeight: FontWeight.w600,
-          color: HydroColors.foreground,
+          color: NatureColors.foreground,
         ),
       ),
       navigationBarTheme: NavigationBarThemeData(
-        backgroundColor: HydroColors.card.withValues(alpha: 0.9),
+        backgroundColor: NatureColors.card.withValues(alpha: 0.9),
         indicatorColor: Colors.transparent,
         labelTextStyle: WidgetStateProperty.resolveWith((states) {
           final active = states.contains(WidgetState.selected);
           return GoogleFonts.inter(
             fontSize: 10,
             fontWeight: FontWeight.w500,
-            color: active ? HydroColors.accent : HydroColors.mutedForeground,
+            color: active ? NatureColors.accent : NatureColors.mutedForeground,
           );
         }),
         iconTheme: WidgetStateProperty.resolveWith((states) {
           final active = states.contains(WidgetState.selected);
           return IconThemeData(
-            color: active ? HydroColors.accent : HydroColors.mutedForeground,
+            color: active ? NatureColors.accent : NatureColors.mutedForeground,
             size: 22,
           );
         }),
@@ -131,10 +124,10 @@ class AppTheme {
       titleSmall: GoogleFonts.outfit(fontSize: 14, fontWeight: FontWeight.w500, color: base),
       bodyLarge: GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.w400, color: base),
       bodyMedium: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.w400, color: base),
-      bodySmall: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.w400, color: HydroColors.mutedForeground),
+      bodySmall: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.w400, color: NatureColors.mutedForeground),
       labelLarge: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.w500, color: base),
       labelMedium: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.w500, color: base),
-      labelSmall: GoogleFonts.inter(fontSize: 10, fontWeight: FontWeight.w500, color: HydroColors.mutedForeground),
+      labelSmall: GoogleFonts.inter(fontSize: 10, fontWeight: FontWeight.w500, color: NatureColors.mutedForeground),
     );
   }
 }
