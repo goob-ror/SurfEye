@@ -157,8 +157,23 @@ class MainActivity : FlutterActivity() {
                                     Imgproc.putText(annotatedImg, java.lang.String.format(java.util.Locale.US, "%.1f", rightAngle) + "\u00B0", org.opencv.core.Point(rightPtObj.x - 120, rightPtObj.y - 40), Imgproc.FONT_HERSHEY_SIMPLEX, 1.5, org.opencv.core.Scalar(0.0, 255.0, 0.0), 4)
                                 }
                                 
+                                // --- 1:1 Cropping logic ---
+                                val rect = Imgproc.boundingRect(largestContour)
+                                val size = (Math.max(rect.width, rect.height) * 1.5).toInt()
+                                val centerX = rect.x + rect.width / 2
+                                val centerY = baselineY - (baselineY - rect.y) / 2
+                                
+                                var cropX = centerX - size / 2
+                                var cropY = centerY - size / 2
+                                cropX = Math.max(0, cropX)
+                                cropY = Math.max(0, cropY)
+                                
+                                val cropSize = Math.min(size, Math.min(img.cols() - cropX, img.rows() - cropY))
+                                val finalRect = org.opencv.core.Rect(cropX, cropY, cropSize, cropSize)
+                                val croppedImg = Mat(annotatedImg, finalRect)
+
                                 val outPath = imagePath.replace(".jpg", "_annotated.jpg")
-                                Imgcodecs.imwrite(outPath, annotatedImg)
+                                Imgcodecs.imwrite(outPath, croppedImg)
                                 resultJson.put("annotated_image_path", outPath)
                                 
                                 runOnUiThread {

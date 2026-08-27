@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:surfeye_app/models/measurement.dart';
 import 'package:surfeye_app/services/database_service.dart';
 import 'package:surfeye_app/theme/app_theme.dart';
@@ -112,10 +113,16 @@ class _HomeScreenState extends State<HomeScreen> {
                 children: [
                   const SizedBox(height: 0),
 
-                  // New Measurement card (overlaps header by -16)
+                  // New Measurement card (overlaps header by )
                   Transform.translate(
-                    offset: const Offset(0, -16),
-                    child: _NewMeasurementCard(),
+                    offset: const Offset(0, 16),
+                    child: Row(
+                      children: [
+                        Expanded(child: _NewMeasurementCard()),
+                        const SizedBox(width: 12),
+                        Expanded(child: _UploadImageCard()),
+                      ],
+                    ),
                   ),
 
                   const SizedBox(height: 20),
@@ -210,56 +217,104 @@ class _NewMeasurementCard extends StatelessWidget {
           border: Border.all(color: NatureColors.border),
           boxShadow: NatureColors.natureGlow,
         ),
-        child: Row(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Container(
-                        width: 44,
-                        height: 44,
-                        decoration: BoxDecoration(
-                          gradient: NatureColors.natureGradient,
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: const Icon(Icons.science_rounded,
-                            color: Colors.white, size: 22),
-                      ),
-                      const SizedBox(width: 12),
-                      Text(
-                        'Pengukuran Baru',
-                        style: GoogleFonts.outfit(
-                          fontSize: 17,
-                          fontWeight: FontWeight.w600,
-                          color: NatureColors.cardForeground,
-                        ),
-                      ),
-                    ],
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    gradient: NatureColors.natureGradient,
+                    borderRadius: BorderRadius.circular(12),
                   ),
-                  const SizedBox(height: 10),
-                  Text(
-                    'Ambil gambar tetesan air untuk menganalisis sudut kontak dan kebasahan permukaan.',
-                    style: GoogleFonts.inter(
-                      fontSize: 13,
-                      color: NatureColors.mutedForeground,
-                      height: 1.5,
-                    ),
-                  ),
-                ],
+                  child: const Icon(Icons.science_rounded,
+                      color: Colors.white, size: 22),
+                ),
+                const Icon(Icons.arrow_forward_rounded,
+                    color: NatureColors.accent, size: 20),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'Pengukuran\nBaru',
+              style: GoogleFonts.outfit(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: NatureColors.cardForeground,
               ),
             ),
-            const SizedBox(width: 12),
-            const Icon(Icons.arrow_forward_rounded,
-                color: NatureColors.accent, size: 20),
           ],
         ),
       )
           .animate()
           .fadeIn(delay: 100.ms, duration: 400.ms)
           .slideY(begin: 0.15, end: 0, delay: 100.ms),
+    );
+  }
+}
+
+// ── Upload Image card ──────────────────────────────────────────────────────────
+class _UploadImageCard extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: () async {
+        final picker = ImagePicker();
+        final pickedFile = await picker.pickImage(source: ImageSource.gallery);
+        if (pickedFile != null && context.mounted) {
+          context.push('/calibration', extra: {'imagePath': pickedFile.path});
+        }
+      },
+      child: Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: NatureColors.card,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: NatureColors.border),
+          boxShadow: NatureColors.natureGlow,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      colors: [NatureColors.secondary, NatureColors.primary],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: const Icon(Icons.image_search_rounded,
+                      color: Colors.white, size: 22),
+                ),
+                const Icon(Icons.arrow_forward_rounded,
+                    color: NatureColors.secondary, size: 20),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'Unggah\nGambar',
+              style: GoogleFonts.outfit(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: NatureColors.cardForeground,
+              ),
+            ),
+          ],
+        ),
+      )
+          .animate()
+          .fadeIn(delay: 200.ms, duration: 400.ms)
+          .slideY(begin: 0.15, end: 0, delay: 200.ms),
     );
   }
 }

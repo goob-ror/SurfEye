@@ -27,6 +27,16 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   bool _isLoading = false;
   bool _isCalibrationAuto = true;
 
+  // Zoom state
+  double _minZoomLevel = 1.0;
+  double _maxZoomLevel = 1.0;
+  double _currentZoomLevel = 1.0;
+  double _baseZoomLevel = 1.0;
+
+  // Focus state
+  Offset? _focusPoint;
+  Timer? _focusTimer;
+
   // Live preview state
   bool _isHolding = false;
   Timer? _previewTimer;
@@ -45,6 +55,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _previewTimer?.cancel();
+    _focusTimer?.cancel();
     _controller?.dispose();
     super.dispose();
   }
@@ -70,6 +81,14 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
       );
       _controller = CameraController(camera, ResolutionPreset.high, enableAudio: false);
       await _controller!.initialize();
+      
+      try {
+        _maxZoomLevel = await _controller!.getMaxZoomLevel();
+        _minZoomLevel = await _controller!.getMinZoomLevel();
+      } catch (_) {
+        // Fallbacks if not supported
+      }
+      
       if (mounted) setState(() => _isCameraActive = true);
     } catch (e) {
       if (mounted) {
@@ -184,7 +203,69 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
         children: [
           // ── Camera preview ─────────────────────────────────────────────
           if (_isCameraActive && _controller != null)
-            Positioned.fill(child: CameraPreview(_controller!)),
+            Positioned.fill(
+              child: GestureDetector(
+                onScaleStart: (details) {
+                  _baseZoomLevel = _currentZoomLevel;
+                },
+                onScaleUpdate: (details) async {
+                  if (_controller == null) return;
+                  double targetZoom = _baseZoomLevel * details.scale;
+                  targetZoom = targetZoom.clamp(_minZoomLevel, _maxZoomLevel);
+                  try {
+                    await _controller!.setZoomLevel(targetZoom);
+                    if (mounted) {
+                      setState(() {
+                        _currentZoomLevel = targetZoom;
+                      });
+                    }
+                  } catch (e) {
+                    // Ignore zoom errors on unsupported devices
+                  }
+                },
+                onTapDown: (details) async {
+                  if (_controller == null) return;
+                  final RenderBox box = context.findRenderObject() as RenderBox;
+                  final Offset localPosition = box.globalToLocal(details.globalPosition);
+                  final double dx = localPosition.dx / box.size.width;
+                  final double dy = localPosition.dy / box.size.height;
+                  
+                  if (mounted) {
+                    setState(() {
+                      _focusPoint = localPosition;
+                    });
+                    _focusTimer?.cancel();
+                    _focusTimer = Timer(const Duration(seconds: 2), () {
+                      if (mounted) setState(() => _focusPoint = null);
+                    });
+                  }
+
+                  try {
+                    await _controller!.setFocusPoint(Offset(dx, dy));
+                    await _controller!.setFocusMode(FocusMode.auto);
+                  } catch (e) {
+                    // Ignore focus errors on unsupported devices
+                  }
+                },
+                child: CameraPreview(_controller!),
+              ),
+            ),
+
+          // ── Visual Focus Indicator ─────────────────────────────────────
+          if (_isCameraActive && _focusPoint != null)
+            Positioned(
+              left: _focusPoint!.dx - 35,
+              top: _focusPoint!.dy - 35,
+              child: IgnorePointer(
+                child: Container(
+                  width: 70,
+                  height: 70,
+                  decoration: BoxDecoration(
+                    border: Border.all(color: NatureColors.accent, width: 2),
+                  ),
+                ).animate().scale(begin: const Offset(1.2, 1.2), duration: 200.ms, curve: Curves.easeOut),
+              ),
+            ),
 
           // ── Pre-camera state ───────────────────────────────────────────
           if (!_isCameraActive)
