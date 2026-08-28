@@ -19,8 +19,10 @@ simplest, least error-prone thing to pass across the Chaquopy boundary
 """
 
 import json
+import os
 from typing import Optional
 
+import cv2
 import numpy as np
 
 from .config import Settings
@@ -66,13 +68,24 @@ def analyze_droplet(
                 raise ValueError("Provide image_path, edges, or contour_points.")
             _, edges = preprocessor.preprocess(image_path, settings)
 
-        resolved_baseline_y = baseline_mod.detect_baseline(edges, settings, baseline_y=baseline_y)
+        # Auto-detect baseline first; then honour manual override if given
+        auto_baseline_y = baseline_mod.detect_baseline(edges, settings, baseline_y=None)
+        resolved_baseline_y = baseline_y if baseline_y is not None else auto_baseline_y
+
         if resolved_baseline_y is None:
             return {"success": False, "error": "Baseline not detected. Pass baseline_y explicitly."}
 
         contour_points = contour_mod.extract_droplet_contour(edges, resolved_baseline_y, settings)
         if contour_points is None:
             return {"success": False, "error": "No droplet contour found."}
+
+        # Save the B&W edge image so the app can display it on the results screen
+        if image_path is not None:
+            base, _ = os.path.splitext(image_path)
+            edge_image_path = base + "_edges.png"
+            cv2.imwrite(edge_image_path, edges)
+        else:
+            edge_image_path = None
     else:
         if baseline_y is None:
             raise ValueError(
@@ -80,6 +93,8 @@ def analyze_droplet(
                 "(auto-detection needs the edge map, which wasn't provided)."
             )
         resolved_baseline_y = int(baseline_y)
+        auto_baseline_y = resolved_baseline_y
+        edge_image_path = None
 
     fit = fit_young_laplace(contour_points, resolved_baseline_y, settings)
 
@@ -96,7 +111,9 @@ def analyze_droplet(
             "success": True,
             "method": "circle_fallback",
             "baseline_y": resolved_baseline_y,
+            "detected_baseline_y": auto_baseline_y,
             "baseline_mode": "manual" if baseline_y is not None else "auto",
+            "edge_image_path": edge_image_path,
             **circle_result,
         }
     else:
@@ -104,7 +121,9 @@ def analyze_droplet(
             "success": True,
             "method": "young_laplace",
             "baseline_y": resolved_baseline_y,
+            "detected_baseline_y": auto_baseline_y,
             "baseline_mode": "manual" if baseline_y is not None else "auto",
+            "edge_image_path": edge_image_path,
             "apex_x_px": fit.apex_x,
             "apex_y_px": fit.apex_y,
             "apex_radius_px": fit.b,

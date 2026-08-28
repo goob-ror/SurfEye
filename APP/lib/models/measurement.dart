@@ -4,6 +4,7 @@
   final String surface;
   final DateTime timestamp;
   final String? imagePath;
+  final String? edgeImagePath;
   // Optional richer fields from Young-Laplace analysis
   final double? leftAngle;
   final double? rightAngle;
@@ -19,6 +20,7 @@
     required this.surface,
     required this.timestamp,
     this.imagePath,
+    this.edgeImagePath,
     this.leftAngle,
     this.rightAngle,
     this.bondNumber,
@@ -35,6 +37,7 @@
       'surface': surface,
       'timestamp': timestamp.toIso8601String(),
       'imagePath': imagePath,
+      'edgeImagePath': edgeImagePath,
       'leftAngle': leftAngle,
       'rightAngle': rightAngle,
       'bondNumber': bondNumber,
@@ -52,6 +55,7 @@
       surface: map['surface'] as String,
       timestamp: DateTime.parse(map['timestamp'] as String),
       imagePath: map['imagePath'] as String?,
+      edgeImagePath: map['edgeImagePath'] as String?,
       leftAngle: (map['leftAngle'] as num?)?.toDouble(),
       rightAngle: (map['rightAngle'] as num?)?.toDouble(),
       bondNumber: (map['bondNumber'] as num?)?.toDouble(),

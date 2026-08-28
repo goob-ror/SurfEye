@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -43,162 +44,173 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: NatureColors.background,
-      body: Column(
-        children: [
-          // ── Gradient header ──────────────────────────────────────────────
-          Container(
-            width: double.infinity,
-            decoration: const BoxDecoration(
-              gradient: NatureColors.natureGradient,
-            ),
-            padding: EdgeInsets.only(
-              top: MediaQuery.of(context).padding.top + 16,
-              left: 24,
-              right: 24,
-              bottom: 28,
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    ClipOval(
-                      child: Image.asset(
-                        'assets/images/logopkm26.png',
-                        height: 56,
-                        width: 56,
-                        fit: BoxFit.cover,
-                        errorBuilder: (_, _, _) => const Icon(
-                          Icons.energy_savings_leaf,
-                          color: Colors.white,
-                          size: 56,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Text(
-                      'SurfEye',
-                      style: GoogleFonts.outfit(
-                        fontSize: 22,
-                        fontWeight: FontWeight.w800,
-                        color: Colors.white,
-                        letterSpacing: -0.5,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  'Penganalisis Sudut Kontak',
-                  style: GoogleFonts.inter(
-                    fontSize: 13,
-                    color: Colors.white.withValues(alpha: 0.7),
-                  ),
-                ),
-              ],
-            ),
-          )
-              .animate()
-              .fadeIn(duration: 400.ms)
-              .slideY(begin: -0.1, end: 0, duration: 400.ms),
-
-          // ── Scrollable body ──────────────────────────────────────────────
-          Expanded(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(20, 0, 20, 100),
+    return PopScope(
+      // Intercept the Android back button on the home screen (root).
+      // Instead of closing the app, we'll minimize it using a platform channel.
+      canPop: true,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) {
+          // Move the app to the background (minimize)
+          const MethodChannel('com.surfeye/app').invokeMethod('moveToBack');
+        }
+      },
+      child: Scaffold(
+        backgroundColor: NatureColors.background,
+        body: Column(
+          children: [
+            // ── Gradient header ──────────────────────────────────────────────
+            Container(
+              width: double.infinity,
+              decoration: const BoxDecoration(
+                gradient: NatureColors.natureGradient,
+              ),
+              padding: EdgeInsets.only(
+                top: MediaQuery.of(context).padding.top + 16,
+                left: 24,
+                right: 24,
+                bottom: 28,
+              ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const SizedBox(height: 0),
-
-                  // New Measurement card (overlaps header by )
-                  Transform.translate(
-                    offset: const Offset(0, 16),
-                    child: Row(
-                      children: [
-                        Expanded(child: _NewMeasurementCard()),
-                        const SizedBox(width: 12),
-                        Expanded(child: _UploadImageCard()),
-                      ],
-                    ),
-                  ),
-
-                  const SizedBox(height: 20),
-
-                  // Recent tests heading
                   Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text(
-                        'Tes Terbaru',
-                        style: GoogleFonts.outfit(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                          color: NatureColors.foreground,
+                      ClipOval(
+                        child: Image.asset(
+                          'assets/images/logopkm26.png',
+                          height: 56,
+                          width: 56,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, _, _) => const Icon(
+                            Icons.energy_savings_leaf,
+                            color: Colors.white,
+                            size: 56,
+                          ),
                         ),
                       ),
-                      GestureDetector(
-                        onTap: () {},
-                        child: Text(
-                          'Lihat Semua',
-                          style: GoogleFonts.inter(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w500,
-                            color: NatureColors.accent,
-                          ),
+                      const SizedBox(width: 10),
+                      Text(
+                        'SurfEye',
+                        style: GoogleFonts.outfit(
+                          fontSize: 22,
+                          fontWeight: FontWeight.w800,
+                          color: Colors.white,
+                          letterSpacing: -0.5,
                         ),
                       ),
                     ],
-                  )
-                      .animate()
-                      .fadeIn(delay: 300.ms, duration: 400.ms),
-
-                  const SizedBox(height: 12),
-
-                  if (_isLoading)
-                    const Center(child: CircularProgressIndicator())
-                  else if (_measurements.isEmpty)
-                    Center(
-                      child: Padding(
-                        padding: const EdgeInsets.all(20.0),
-                        child: Text(
-                          'Belum ada tes. Lakukan pengukuran!',
-                          style: GoogleFonts.inter(color: NatureColors.mutedForeground),
-                        ),
-                      ),
-                    )
-                  else
-                    // Recent test cards
-                    ..._measurements.asMap().entries.map((entry) {
-                      final i = entry.key;
-                      final test = entry.value;
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 10),
-                        child: GestureDetector(
-                          onTap: () => context.go('/results', extra: {'measurement': test}),
-                          child: _RecentTestCard(
-                            test: test,
-                            categoryColor: _categoryColor(test.category),
-                          ),
-                        )
-                            .animate()
-                            .fadeIn(delay: Duration(milliseconds: 400 + i * 100))
-                            .slideX(
-                              begin: -0.1,
-                              end: 0,
-                              delay: Duration(milliseconds: 400 + i * 100),
-                            ),
-                      );
-                    }),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Penganalisis Sudut Kontak',
+                    style: GoogleFonts.inter(
+                      fontSize: 13,
+                      color: Colors.white.withValues(alpha: 0.7),
+                    ),
+                  ),
                 ],
               ),
+            )
+                .animate()
+                .fadeIn(duration: 400.ms)
+                .slideY(begin: -0.1, end: 0, duration: 400.ms),
+
+            // ── Scrollable body ──────────────────────────────────────────────
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 100),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const SizedBox(height: 0),
+
+                    // New Measurement card (overlaps header by )
+                    Transform.translate(
+                      offset: const Offset(0, 16),
+                      child: Row(
+                        children: [
+                          Expanded(child: _NewMeasurementCard()),
+                          const SizedBox(width: 12),
+                          Expanded(child: _UploadImageCard()),
+                        ],
+                      ),
+                    ),
+
+                    const SizedBox(height: 20),
+
+                    // Recent tests heading
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          'Tes Terbaru',
+                          style: GoogleFonts.outfit(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: NatureColors.foreground,
+                          ),
+                        ),
+                        GestureDetector(
+                          onTap: () {},
+                          child: Text(
+                            'Lihat Semua',
+                            style: GoogleFonts.inter(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500,
+                              color: NatureColors.accent,
+                            ),
+                          ),
+                        ),
+                      ],
+                    )
+                        .animate()
+                        .fadeIn(delay: 300.ms, duration: 400.ms),
+
+                    const SizedBox(height: 12),
+
+                    if (_isLoading)
+                      const Center(child: CircularProgressIndicator())
+                    else if (_measurements.isEmpty)
+                      Center(
+                        child: Padding(
+                          padding: const EdgeInsets.all(20.0),
+                          child: Text(
+                            'Belum ada tes. Lakukan pengukuran!',
+                            style: GoogleFonts.inter(color: NatureColors.mutedForeground),
+                          ),
+                        ),
+                      )
+                    else
+                      // Recent test cards
+                      ..._measurements.asMap().entries.map((entry) {
+                        final i = entry.key;
+                        final test = entry.value;
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 10),
+                          child: GestureDetector(
+                            onTap: () => context.go('/results', extra: {'measurement': test}),
+                            child: _RecentTestCard(
+                              test: test,
+                              categoryColor: _categoryColor(test.category),
+                            ),
+                          )
+                              .animate()
+                              .fadeIn(delay: Duration(milliseconds: 400 + i * 100))
+                              .slideX(
+                                begin: -0.1,
+                                end: 0,
+                                delay: Duration(milliseconds: 400 + i * 100),
+                              ),
+                        );
+                      }),
+                  ],
+                ),
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
+        bottomNavigationBar: const BottomNav(),
       ),
-      bottomNavigationBar: const BottomNav(),
     );
   }
 }
@@ -256,7 +268,7 @@ class _NewMeasurementCard extends StatelessWidget {
   }
 }
 
-// ── Upload Image card ──────────────────────────────────────────────────────────
+// ── Upload Image card ─────���────────────────────────────────────────────────────
 class _UploadImageCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {

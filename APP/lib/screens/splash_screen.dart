@@ -20,17 +20,19 @@ class _SplashScreenState extends State<SplashScreen> {
       ..initialize().then((_) {
         setState(() {});
         _controller.play();
-        
-        // Wait for video to finish, then navigate to home
+
+        // Navigate when video finishes
         _controller.addListener(() {
-          if (_controller.value.position >= _controller.value.duration && 
+          if (_controller.value.position >= _controller.value.duration &&
               !_controller.value.isPlaying) {
-            if (mounted) {
-              context.go('/');
-            }
+            _goHome();
           }
         });
       });
+  }
+
+  void _goHome() {
+    if (mounted) context.go('/');
   }
 
   @override
@@ -43,13 +45,38 @@ class _SplashScreenState extends State<SplashScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: NatureColors.background,
-      body: Center(
-        child: _controller.value.isInitialized
-            ? AspectRatio(
-                aspectRatio: _controller.value.aspectRatio,
-                child: VideoPlayer(_controller),
-              )
-            : const CircularProgressIndicator(),
+      body: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: _goHome,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            Center(
+              child: _controller.value.isInitialized
+                  ? AspectRatio(
+                      aspectRatio: _controller.value.aspectRatio,
+                      child: VideoPlayer(_controller),
+                    )
+                  : const CircularProgressIndicator(),
+            ),
+            // Skip hint
+            const Positioned(
+              bottom: 40,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: Text(
+                  'Ketuk untuk lewati',
+                  style: TextStyle(
+                    color: Colors.white54,
+                    fontSize: 13,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

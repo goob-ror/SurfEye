@@ -6,7 +6,6 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:surfeye_app/theme/app_theme.dart';
-import 'package:surfeye_app/widgets/bottom_nav.dart';
 import 'package:flutter/services.dart';
 
 class CameraScreen extends StatefulWidget {
@@ -401,7 +400,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
           // ── Capture button (tap = instant, hold = live preview) ────────
           if (_isCameraActive)
             Positioned(
-              bottom: 100, left: 0, right: 0,
+              bottom: 40, left: 0, right: 0,
               child: Center(
                 child: GestureDetector(
                   onTap: _isCapturing ? null : _captureImage,
@@ -441,8 +440,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
                   .slideY(begin: 0.3, end: 0, delay: 200.ms),
             ),
 
-          // ── Bottom Nav ─────────────────────────────────────────────────
-          Positioned(bottom: 0, left: 0, right: 0, child: const BottomNav(dark: true)),
+          // Bottom nav intentionally omitted — full-screen camera mode
         ],
       ),
     );

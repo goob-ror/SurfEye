@@ -17,7 +17,7 @@ class DatabaseService {
   Future<Database> _initDB(String filePath) async {
     final dbPath = await getDatabasesPath();
     final path = join(dbPath, filePath);
-    return await openDatabase(path, version: 2, onCreate: _createDB, onUpgrade: _upgradeDB);
+    return await openDatabase(path, version: 3, onCreate: _createDB, onUpgrade: _upgradeDB);
   }
 
   Future _createDB(Database db, int version) async {
@@ -28,6 +28,7 @@ CREATE TABLE measurements (
   surface TEXT NOT NULL,
   timestamp TEXT NOT NULL,
   imagePath TEXT,
+  edgeImagePath TEXT,
   leftAngle REAL,
   rightAngle REAL,
   bondNumber REAL,
@@ -49,6 +50,9 @@ CREATE TABLE measurements (
       await db.execute('ALTER TABLE measurements ADD COLUMN dropletHeightPx REAL');
       await db.execute('ALTER TABLE measurements ADD COLUMN fitResidualRms REAL');
     }
+    if (oldVersion < 3) {
+      await db.execute('ALTER TABLE measurements ADD COLUMN edgeImagePath TEXT');
+    }
   }
 
   Future<Measurement> insertMeasurement(Measurement measurement) async {
@@ -62,6 +66,7 @@ CREATE TABLE measurements (
       surface: measurement.surface,
       timestamp: measurement.timestamp,
       imagePath: measurement.imagePath,
+      edgeImagePath: measurement.edgeImagePath,
       leftAngle: measurement.leftAngle,
       rightAngle: measurement.rightAngle,
       bondNumber: measurement.bondNumber,
