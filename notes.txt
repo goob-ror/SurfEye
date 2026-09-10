@@ -1,0 +1,1 @@
+Kamera Page hide all system native bars (navigation, notification)

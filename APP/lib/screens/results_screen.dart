@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:go_router/go_router.dart';
 import 'package:photo_view/photo_view.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:surfeye_app/models/measurement.dart';
@@ -83,10 +84,11 @@ class _ResultsScreenState extends State<ResultsScreen> {
     final catColor = _categoryColor;
 
     return PopScope(
-      // canPop: true — the default; system back navigates to the previous
-      // route (camera or home) rather than calling context.go('/') which
-      // would always jump to home and lose the back-stack.
-      canPop: true,
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        context.go('/');
+      },
       child: Scaffold(
         backgroundColor: NatureColors.background,
         body: Column(
@@ -101,7 +103,7 @@ class _ResultsScreenState extends State<ResultsScreen> {
                   children: [
                     _IconBtn(
                       icon: Icons.arrow_back_rounded,
-                      onTap: () => Navigator.of(context).maybePop(),
+                      onTap: () => context.go('/'),
                     ),
                     const Spacer(),
                     Text('Hasil',
@@ -403,23 +405,36 @@ class _FullscreenImagePage extends StatelessWidget {
         ),
       ),
       body: PhotoView(
-        imageProvider: FileImage(File(filePath)),
+        imageProvider: (filePath.startsWith('http://') || filePath.startsWith('https://'))
+            ? NetworkImage(filePath, headers: const {'ngrok-skip-browser-warning': 'true'})
+                as ImageProvider
+            : FileImage(File(filePath)),
         minScale: PhotoViewComputedScale.contained,
         maxScale: PhotoViewComputedScale.covered * 4,
         backgroundDecoration: const BoxDecoration(color: Colors.black),
         loadingBuilder: (_, _) => const Center(
           child: CircularProgressIndicator(color: NatureColors.accent),
         ),
-        errorBuilder: (_, _, _) => Center(
+        errorBuilder: (_, error, _) => Center(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               const Icon(Icons.broken_image_rounded,
                   color: NatureColors.mutedForeground, size: 48),
               const SizedBox(height: 12),
-              Text('Gambar tidak ditemukan',
+              Text('Gambar tidak dapat dimuat',
                   style: GoogleFonts.inter(
                       color: NatureColors.mutedForeground, fontSize: 13)),
+              const SizedBox(height: 6),
+              Padding(
+                padding: EdgeInsets.symmetric(horizontal: 24),
+                child: Text(
+                  filePath,
+                  style: GoogleFonts.inter(
+                      color: NatureColors.mutedForeground, fontSize: 10),
+                  textAlign: TextAlign.center,
+                ),
+              ),
             ],
           ),
         ),
@@ -428,7 +443,6 @@ class _FullscreenImagePage extends StatelessWidget {
   }
 }
 
-// ── Tappable image card ────────────────────────────────────────────────────────
 class _TappableImageCard extends StatelessWidget {
   const _TappableImageCard({
     required this.filePath,
@@ -441,6 +455,7 @@ class _TappableImageCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isNetwork = filePath.startsWith('http://') || filePath.startsWith('https://');
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -454,29 +469,51 @@ class _TappableImageCard extends StatelessWidget {
           borderRadius: BorderRadius.circular(20),
           child: Stack(
             children: [
-              // Image — B&W edge map, fill width
+              // Image
               AspectRatio(
                 aspectRatio: 4 / 3,
-                child: Image.file(
-                  File(filePath),
-                  fit: BoxFit.cover,
-                  color: Colors.white,
-                  colorBlendMode: BlendMode.modulate,
-                  errorBuilder: (_, _, _) => Container(
-                    color: NatureColors.surface,
-                    child: const Center(
-                      child: Icon(Icons.image_not_supported_rounded,
-                          color: NatureColors.mutedForeground, size: 40),
-                    ),
-                  ),
-                ),
+                child: isNetwork
+                    ? Image.network(
+                        filePath,
+                        fit: BoxFit.cover,
+                        headers: const {'ngrok-skip-browser-warning': 'true'},
+                        loadingBuilder: (_, child, progress) {
+                          if (progress == null) return child;
+                          return Container(
+                            color: NatureColors.surface,
+                            child: Center(
+                              child: CircularProgressIndicator(
+                                color: NatureColors.accent,
+                                value: progress.expectedTotalBytes != null
+                                    ? progress.cumulativeBytesLoaded /
+                                        progress.expectedTotalBytes!
+                                    : null,
+                              ),
+                            ),
+                          );
+                        },
+                        errorBuilder: (context, error, stackTrace) => _ImageErrorWidget(
+                          filePath: filePath,
+                          error: error.toString(),
+                        ),
+                      )
+                    : Image.file(
+                        File(filePath),
+                        fit: BoxFit.cover,
+                        errorBuilder: (context, error, stackTrace) => _ImageErrorWidget(
+                          filePath: filePath,
+                          error: error.toString(),
+                        ),
+                      ),
               ),
+
               // Label bar at bottom
               Positioned(
-                bottom: 0, left: 0, right: 0,
+                bottom: 0,
+                left: 0,
+                right: 0,
                 child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                   decoration: BoxDecoration(
                     gradient: LinearGradient(
                       begin: Alignment.bottomCenter,
@@ -496,11 +533,53 @@ class _TappableImageCard extends StatelessWidget {
                               fontWeight: FontWeight.w600,
                               color: Colors.white70,
                               letterSpacing: 1.1)),
-                      const Icon(Icons.zoom_in_rounded,
-                          color: Colors.white70, size: 18),
+                      const Icon(Icons.fullscreen_rounded,
+                          color: Colors.white70, size: 20),
                     ],
                   ),
                 ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Image error fallback ───────────────────────────────────────────────────────
+class _ImageErrorWidget extends StatelessWidget {
+  const _ImageErrorWidget({required this.filePath, required this.error});
+  final String filePath;
+  final String error;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: NatureColors.surface,
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.broken_image_rounded,
+                  color: NatureColors.mutedForeground, size: 36),
+              const SizedBox(height: 8),
+              Text('Gambar tidak tersedia',
+                  style: GoogleFonts.inter(
+                      color: NatureColors.mutedForeground,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600)),
+              const SizedBox(height: 4),
+              Text(
+                filePath.length > 60
+                    ? '...${filePath.substring(filePath.length - 60)}'
+                    : filePath,
+                style: GoogleFonts.inter(
+                    color: NatureColors.mutedForeground,
+                    fontSize: 9),
+                textAlign: TextAlign.center,
               ),
             ],
           ),

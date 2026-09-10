@@ -24,7 +24,6 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   bool _showGrid = true;
   bool _isCapturing = false;
   bool _isLoading = false;
-  bool _isCalibrationAuto = true;
 
   // Zoom state
   double _minZoomLevel = 1.0;
@@ -123,8 +122,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     try {
       final file = await _controller!.takePicture();
       final args = <String, dynamic>{
-        'imagePath': file.path,
-        'autoCalibration': _isCalibrationAuto,
+        'imagePath': file.path
       };
 
       final resStr = await _previewChannel.invokeMethod<String>('previewAnalyze', args);
@@ -196,7 +194,14 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        _controller?.dispose();
+        context.go('/');
+      },
+      child: Scaffold(
       backgroundColor: NatureColors.foreground,
       body: Stack(
         children: [
@@ -379,19 +384,12 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
                   onTap: () { _controller?.dispose(); context.go('/'); },
                 ),
                 Row(children: [
-                  _CircleButton(
-                    icon: _isCalibrationAuto ? Icons.auto_awesome_rounded : Icons.tune_rounded,
-                    active: !_isCalibrationAuto,
-                    onTap: () => setState(() => _isCalibrationAuto = !_isCalibrationAuto),
-                  ),
                   const SizedBox(width: 8),
                   _CircleButton(
                     icon: Icons.grid_on_rounded,
                     active: _showGrid,
                     onTap: () => setState(() => _showGrid = !_showGrid),
-                  ),
-                  const SizedBox(width: 8),
-                  _CircleButton(icon: Icons.flip_rounded, onTap: () {}),
+                  )
                 ]),
               ],
             ),
@@ -442,6 +440,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
 
           // Bottom nav intentionally omitted — full-screen camera mode
         ],
+      ),
       ),
     );
   }

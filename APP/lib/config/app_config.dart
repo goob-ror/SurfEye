@@ -2,7 +2,7 @@
 ///
 /// When starting the server, run:
 /// ```
-///   cd API && python server.py --token `<your_ngrok_token>`
+///   cd API && python server.py
 /// ```
 ///
 /// The terminal will print a line like:
@@ -14,7 +14,7 @@ class AppConfig {
 
   /// Base URL of the SurfEye FastAPI server.
   /// Example: 'https://xxxx-xx-xx-xxx-xx.ngrok-free.app'
-  static const String baseUrl = 'https://loraine-resistible-hans.ngrok-free.dev/';
+  static const String baseUrl = 'https://loraine-resistible-hans.ngrok-free.dev';
 
   /// /analyze endpoint
   static String get analyzeUrl => '$baseUrl/analyze';

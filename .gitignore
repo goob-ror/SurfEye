@@ -5,6 +5,7 @@ env/
 __pycache__/
 *.py[cod]
 *.pyo
+.kiro
 *.pyd
 *.egg
 *.egg-info/
@@ -76,6 +77,9 @@ APP/macos/Flutter/Flutter-Release.xcconfig
 
 # ── Misc ──────────────────────────────────────────────────────────────────────
 *.log
+dump.txt
+API/dummy.png
+API/test_comparison.py
 *.swp
 *.swo
 .DS_Store
@@ -89,3 +93,8 @@ secrets.py
 *.keystore
 *.jks
 .vscode
+test_images/
+docs/
+API/uploads
+API/comparison_results
+NewAPI

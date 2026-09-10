@@ -2,12 +2,15 @@
 SurfEye API server — FastAPI + pyngrok tunnel.
 
 Usage:
-    python server.py                      # uses NGROK_AUTHTOKEN env var
-    python server.py --token <authtoken>  # explicit token
+    python server.py                      # uses .env for configuration
     python server.py --no-ngrok           # LAN only (no tunnel)
 
 The public ngrok URL is printed to stdout so you can paste it into
 AppConfig.baseUrl in the Flutter app.
+
+Configuration:
+    Settings are loaded from .env file in the API directory.
+    See .env.example for available options.
 """
 
 import argparse
@@ -18,6 +21,7 @@ import uuid
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pipeline import run
+from config_loader import get_ngrok_token, is_ngrok_disabled, PORT
 
 app = FastAPI(title="SurfEye API")
 
@@ -97,11 +101,121 @@ form.addEventListener('submit',async e=>{
     return HTMLResponse(content=html_content)
 
 
+# ── Preview endpoint ───────────────────────────────────────────────────────────
+@app.post("/preview")
+async def preview_preprocessing(
+    file: UploadFile = File(...),
+    brightness: int = Form(default=0),
+    contrast: float = Form(default=1.0),
+    edge_sensitivity: int = Form(default=50),
+    baseline_y: int | None = Form(default=None),
+):
+    """
+    Generate a preview of the preprocessed image with current settings.
+    Returns annotated image showing edges and baseline without full analysis.
+    Uses WebP format for fast transmission.
+    """
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file uploaded")
+
+    file_ext = os.path.splitext(file.filename)[1] or ".png"
+    file_id = str(uuid.uuid4())
+    saved_path = os.path.join(UPLOAD_DIR, f"{file_id}{file_ext}")
+
+    try:
+        with open(saved_path, "wb") as buf:
+            shutil.copyfileobj(file.file, buf)
+
+        # Import necessary functions
+        import cv2
+        import numpy as np
+        from core.preprocessor import preprocess, adjust_brightness_contrast
+
+        # Preprocess with current settings
+        canny_low = max(10, 100 - edge_sensitivity)
+        canny_high = max(20, 200 - edge_sensitivity)
+        
+        img, edges, roi_bounds = preprocess(
+            saved_path,
+            apply_roi=True,
+            brightness=brightness,
+            contrast=contrast,
+            canny_threshold_low=canny_low,
+            canny_threshold_high=canny_high,
+        )
+
+        # Apply tilt correction
+        from core.tilt_correction import correct_tilt
+        img_corrected, edges_corrected, tilt_angle = correct_tilt(img, edges)
+
+        # Crop to ROI
+        from core.preprocessor import crop_to_roi
+        if roi_bounds is not None:
+            gray_corrected = cv2.cvtColor(img_corrected, cv2.COLOR_BGR2GRAY)
+            from core.preprocessor import detect_roi_bounds
+            roi_bounds = detect_roi_bounds(gray_corrected, padding=50)
+            img_roi = crop_to_roi(img_corrected, roi_bounds)
+            edges_roi = crop_to_roi(edges_corrected, roi_bounds)
+            roi_y_offset = roi_bounds[1]
+        else:
+            img_roi = img_corrected
+            edges_roi = edges_corrected
+            roi_y_offset = 0
+
+        h, w = img_roi.shape[:2]
+
+        # Create preview visualization
+        preview = img_roi.copy()
+
+        # Draw edges overlay
+        edges_colored = cv2.cvtColor(edges_roi, cv2.COLOR_GRAY2BGR)
+        edges_colored[edges_roi > 0] = [0, 255, 0]  # Green edges
+        preview = cv2.addWeighted(preview, 0.7, edges_colored, 0.3, 0)
+
+        # Draw baseline if provided
+        if baseline_y is not None:
+            baseline_y_roi = baseline_y - roi_y_offset
+            if 0 <= baseline_y_roi < h:
+                cv2.line(preview, (0, baseline_y_roi), (w, baseline_y_roi), 
+                        (0, 255, 255), 2, cv2.LINE_AA)
+
+        # Convert to WebP for efficient transmission
+        webp_path = os.path.join(UPLOAD_DIR, f"{file_id}_preview.webp")
+        cv2.imwrite(webp_path, preview, [cv2.IMWRITE_WEBP_QUALITY, 85])
+
+        # Clean up original file
+        os.remove(saved_path)
+
+        return JSONResponse(content={
+            "preview_image_path": "/image/" + os.path.basename(webp_path),
+            "tilt_angle": float(tilt_angle),
+            "roi_bounds": roi_bounds,
+        })
+
+    except Exception as exc:
+        # Clean up on error
+        for p in [saved_path, os.path.join(UPLOAD_DIR, f"{file_id}_preview.webp")]:
+            if os.path.exists(p):
+                os.remove(p)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 # ── Analysis endpoint ──────────────────────────────────────────────────────────
 @app.post("/analyze")
 async def analyze_droplet(
     file: UploadFile = File(...),
     baseline_y: int | None = Form(default=None),
+    droplet_x1: float | None = Form(default=None),
+    droplet_y1: float | None = Form(default=None),
+    droplet_x2: float | None = Form(default=None),
+    droplet_y2: float | None = Form(default=None),
+    use_ellipse: bool = Form(default=True),
+    brightness: int = Form(default=0),
+    contrast: float = Form(default=1.0),
+    edge_sensitivity: int = Form(default=50),
+    ellipse_angle: float | None = Form(default=None),
+    ellipse_scale_a: float | None = Form(default=None),
+    ellipse_scale_b: float | None = Form(default=None),
 ):
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file uploaded")
@@ -114,7 +228,31 @@ async def analyze_droplet(
         with open(saved_path, "wb") as buf:
             shutil.copyfileobj(file.file, buf)
 
-        result = run(saved_path, visualize=False, baseline_y_override=baseline_y)
+        # Build droplet bounding box tuple if all coordinates provided
+        droplet_bbox = None
+        if all(coord is not None for coord in [droplet_x1, droplet_y1, droplet_x2, droplet_y2]):
+            droplet_bbox = (droplet_x1, droplet_y1, droplet_x2, droplet_y2)
+
+        # Build ellipse adjustments dictionary if any parameter is provided
+        ellipse_adjustments = None
+        if any(param is not None for param in [ellipse_angle, ellipse_scale_a, ellipse_scale_b]):
+            ellipse_adjustments = {
+                'angle': ellipse_angle,
+                'scale_a': ellipse_scale_a,
+                'scale_b': ellipse_scale_b,
+            }
+
+        result = run(
+            saved_path,
+            visualize=False,
+            baseline_y_override=baseline_y,
+            droplet_bbox=droplet_bbox,
+            use_ellipse=use_ellipse,
+            brightness=brightness,
+            contrast=contrast,
+            edge_sensitivity=edge_sensitivity,
+            ellipse_adjustments=ellipse_adjustments,
+        )
 
         # Convert absolute file-system paths → relative URL paths the app can
         # fetch via GET /image/<filename>
@@ -127,8 +265,8 @@ async def analyze_droplet(
 
     except Exception as exc:
         for p in [saved_path,
-                  os.path.splitext(saved_path)[0] + "_edges.png",
-                  os.path.splitext(saved_path)[0] + "_annotated.png"]:
+                  os.path.splitext(saved_path)[0] + "_edges.webp",
+                  os.path.splitext(saved_path)[0] + "_annotated.webp"]:
             if os.path.exists(p):
                 os.remove(p)
         raise HTTPException(status_code=500, detail=str(exc))
@@ -141,7 +279,17 @@ async def get_image(filename: str):
     path = os.path.join(UPLOAD_DIR, safe)
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail="Image not found")
-    return FileResponse(path, media_type="image/png")
+    
+    # Determine media type based on extension
+    ext = os.path.splitext(safe)[1].lower()
+    media_type = {
+        '.webp': 'image/webp',
+        '.png': 'image/png',
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+    }.get(ext, 'image/png')
+    
+    return FileResponse(path, media_type=media_type)
 
 
 # ── Entry point ────────────────────────────────────────────────────────────────
@@ -149,26 +297,25 @@ if __name__ == "__main__":
     import uvicorn
 
     parser = argparse.ArgumentParser(description="SurfEye API server")
-    parser.add_argument("--token", default=None,
-                        help="ngrok auth token (overrides NGROK_AUTHTOKEN env var)")
     parser.add_argument("--no-ngrok", action="store_true",
                         help="Disable ngrok tunnel (LAN / localhost only)")
-    parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--port", type=int, default=None,
+                        help="Port to run server on (default: 8000 from .env)")
     args = parser.parse_args()
 
-    PORT = args.port
+    PORT = args.port if args.port is not None else PORT
 
-    if not args.no_ngrok:
+    if not args.no_ngrok and not is_ngrok_disabled():
         try:
             from pyngrok import ngrok, conf
 
-            token = args.token or os.environ.get("NGROK_AUTHTOKEN")
+            token = get_ngrok_token()
             if token:
                 conf.get_default().auth_token = token
             else:
                 print(
                     "[SurfEye] WARNING: No ngrok auth token provided.\n"
-                    "  Set NGROK_AUTHTOKEN env var or pass --token <token>.\n"
+                    "  Set NGROK_AUTHTOKEN in .env file.\n"
                     "  Tunnelling may fail without a token on newer ngrok plans.\n"
                 )
 

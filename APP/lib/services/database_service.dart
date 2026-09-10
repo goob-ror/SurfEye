@@ -1,5 +1,6 @@
-﻿import 'package:sqflite/sqflite.dart';
+import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
+import 'package:flutter/foundation.dart';
 import '../models/measurement.dart';
 
 class DatabaseService {
@@ -8,10 +9,21 @@ class DatabaseService {
 
   DatabaseService._init();
 
-  Future<Database> get database async {
+  bool get _isSupported {
+    if (kIsWeb) return false;
+    return defaultTargetPlatform == TargetPlatform.android || defaultTargetPlatform == TargetPlatform.iOS;
+  }
+
+  Future<Database?> get database async {
+    if (!_isSupported) return null;
     if (_database != null) return _database!;
-    _database = await _initDB('measurements.db');
-    return _database!;
+    try {
+      _database = await _initDB('measurements.db');
+    } catch (e) {
+      debugPrint('Database initialization failed: $e');
+      return null;
+    }
+    return _database;
   }
 
   Future<Database> _initDB(String filePath) async {
@@ -57,6 +69,8 @@ CREATE TABLE measurements (
 
   Future<Measurement> insertMeasurement(Measurement measurement) async {
     final db = await instance.database;
+    if (db == null) return measurement;
+
     final map = measurement.toMap();
     map.remove('id');
     final id = await db.insert('measurements', map);
@@ -79,12 +93,16 @@ CREATE TABLE measurements (
 
   Future<List<Measurement>> getMeasurements() async {
     final db = await instance.database;
+    if (db == null) return [];
+
     final result = await db.query('measurements', orderBy: 'timestamp DESC');
     return result.map((json) => Measurement.fromMap(json)).toList();
   }
 
   Future<Measurement?> getMeasurementById(int id) async {
     final db = await instance.database;
+    if (db == null) return null;
+
     final result = await db.query('measurements', where: 'id = ?', whereArgs: [id], limit: 1);
     if (result.isEmpty) return null;
     return Measurement.fromMap(result.first);

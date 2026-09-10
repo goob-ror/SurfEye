@@ -11,11 +11,14 @@ void main() async {
   // Also registers a lifecycle observer to re-apply on app resume.
   await OrientationManager.init();
 
-  // Edge-to-edge immersive display
+  // Edge-to-edge display (prevents overlapping by using proper SafeArea padding)
+  SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
+      systemNavigationBarColor: Colors.transparent,
       statusBarIconBrightness: Brightness.light,
+      systemNavigationBarIconBrightness: Brightness.light,
     ),
   );
 
