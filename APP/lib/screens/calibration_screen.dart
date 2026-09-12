@@ -209,19 +209,18 @@ class _CalibrationScreenState extends State<CalibrationScreen>
     // Grayscale weights (luminance)
     const rl = 0.2126, gl = 0.7152, bl = 0.0722;
 
-    // Contrast: scale each channel around 0.5 mid-point
+    // Contrast: scale each channel directly (matches Python: img * contrast)
     final c  = _contrast;
-    final t  = (1.0 - c) / 2.0;
 
-    // Brightness: add as a constant offset in [0..1] space
-    final b  = _brightness / 255.0;
+    // Brightness: add as a constant offset in 0-255 space (matches Python: + brightness)
+    final b  = _brightness.toDouble();
 
     // Combined: gray * contrast + brightness_offset
     // Row order: [R, G, B, A, offset]
     return [
-      rl*c, gl*c, bl*c, 0, t + b,
-      rl*c, gl*c, bl*c, 0, t + b,
-      rl*c, gl*c, bl*c, 0, t + b,
+      rl*c, gl*c, bl*c, 0, b,
+      rl*c, gl*c, bl*c, 0, b,
+      rl*c, gl*c, bl*c, 0, b,
       0,    0,    0,    1, 0,
     ];
   }
@@ -421,7 +420,18 @@ class _CalibrationScreenState extends State<CalibrationScreen>
         return;
       }
 
-      final angle    = ((r['average_angle'] as num?)?.toDouble() ?? 0.0).clamp(0.0, 180.0);
+      // Prefer the client-side WCA result (shown on calibration screen) over
+      // the server's angle so that calibration and results always agree.
+      // Fall back to server values when no client result is available.
+      final clientWca = _wcaResult;
+      final angle = clientWca != null
+          ? clientWca.avgAngle.clamp(0.0, 180.0)
+          : ((r['average_angle'] as num?)?.toDouble() ?? 0.0).clamp(0.0, 180.0);
+      final leftAngle = clientWca?.leftAngle
+          ?? (r['left_angle']  as num?)?.toDouble();
+      final rightAngle = clientWca?.rightAngle
+          ?? (r['right_angle'] as num?)?.toDouble();
+
       final surface  = r['classification'] as String? ?? 'Tidak Diketahui';
       final annPath  = r['annotated_image_path'] as String? ?? widget.imagePath;
       final edgePath = r['edge_image_path'] as String?;
@@ -430,8 +440,8 @@ class _CalibrationScreenState extends State<CalibrationScreen>
         id: 0, angle: angle, surface: surface,
         timestamp: DateTime.now(), imagePath: annPath,
         edgeImagePath: edgePath,
-        leftAngle:       (r['left_angle']          as num?)?.toDouble(),
-        rightAngle:      (r['right_angle']         as num?)?.toDouble(),
+        leftAngle:       leftAngle,
+        rightAngle:      rightAngle,
         bondNumber:      (r['bond_number']         as num?)?.toDouble(),
         method:          r['method']               as String?,
         dropletWidthPx:  (r['droplet_width_px']   as num?)?.toDouble(),
