@@ -20,6 +20,7 @@ htmlcov/
 .coverage
 .coverage.*
 coverage.xml
+server2.py
 
 # ── Test / sample images (not for version control) ────────────────────────────
 API/image*.png
@@ -98,3 +99,6 @@ docs/
 API/uploads
 API/comparison_results
 NewAPI
+API.zip
+test.zip
+report.md

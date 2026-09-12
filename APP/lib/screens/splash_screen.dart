@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:video_player/video_player.dart';
@@ -11,24 +12,33 @@ class SplashScreen extends StatefulWidget {
 }
 
 class _SplashScreenState extends State<SplashScreen> {
-  late VideoPlayerController _controller;
+  VideoPlayerController? _controller;
 
   @override
   void initState() {
     super.initState();
-    _controller = VideoPlayerController.asset('assets/images/PKM2026_Intro.mp4')
-      ..initialize().then((_) {
-        setState(() {});
-        _controller.play();
 
-        // Navigate when video finishes
-        _controller.addListener(() {
-          if (_controller.value.position >= _controller.value.duration &&
-              !_controller.value.isPlaying) {
-            _goHome();
-          }
-        });
-      });
+    if (kIsWeb) {
+      // video_player does not support asset videos reliably on web.
+      // Navigate directly after a brief delay so the app still loads fast.
+      Future.delayed(const Duration(milliseconds: 1800), _goHome);
+    } else {
+      _controller =
+          VideoPlayerController.asset('assets/images/PKM2026_Intro.mp4')
+            ..initialize().then((_) {
+              setState(() {});
+              _controller!.play();
+
+              // Navigate when video finishes
+              _controller!.addListener(() {
+                if (_controller!.value.position >=
+                        _controller!.value.duration &&
+                    !_controller!.value.isPlaying) {
+                  _goHome();
+                }
+              });
+            });
+    }
   }
 
   void _goHome() {
@@ -37,12 +47,49 @@ class _SplashScreenState extends State<SplashScreen> {
 
   @override
   void dispose() {
-    _controller.dispose();
+    _controller?.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    // ── Web: simple branded loading screen ──────────────────────────────────
+    if (kIsWeb) {
+      return Scaffold(
+        backgroundColor: NatureColors.foreground,
+        body: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ClipOval(
+                child: Image.asset(
+                  'assets/images/logopkm26.png',
+                  width: 96,
+                  height: 96,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, _, _) => const Icon(
+                    Icons.energy_savings_leaf,
+                    color: Colors.white,
+                    size: 96,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 24),
+              const SizedBox(
+                width: 32,
+                height: 32,
+                child: CircularProgressIndicator(
+                  color: NatureColors.accent,
+                  strokeWidth: 3,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // ── Mobile: video splash ─────────────────────────────────────────────────
     return Scaffold(
       backgroundColor: NatureColors.background,
       body: GestureDetector(
@@ -52,10 +99,10 @@ class _SplashScreenState extends State<SplashScreen> {
           fit: StackFit.expand,
           children: [
             Center(
-              child: _controller.value.isInitialized
+              child: (_controller?.value.isInitialized ?? false)
                   ? AspectRatio(
-                      aspectRatio: _controller.value.aspectRatio,
-                      child: VideoPlayer(_controller),
+                      aspectRatio: _controller!.value.aspectRatio,
+                      child: VideoPlayer(_controller!),
                     )
                   : const CircularProgressIndicator(),
             ),

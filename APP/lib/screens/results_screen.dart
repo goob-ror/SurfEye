@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -33,7 +34,7 @@ class _ResultsScreenState extends State<ResultsScreen> {
   String get _formattedAngle => _angle.toStringAsFixed(2);
 
   String get _category {
-    if (_angle < 10) return 'Super-Hidrofilik';
+    if (_angle < 5) return 'Super-Hidrofilik';
     if (_angle < 90) return 'Hidrofilik';
     if (_angle < 150) return 'Hidrofobik';
     return 'Super-Hidrofobik';
@@ -408,7 +409,9 @@ class _FullscreenImagePage extends StatelessWidget {
         imageProvider: (filePath.startsWith('http://') || filePath.startsWith('https://'))
             ? NetworkImage(filePath, headers: const {'ngrok-skip-browser-warning': 'true'})
                 as ImageProvider
-            : FileImage(File(filePath)),
+            : kIsWeb
+                ? NetworkImage(filePath) as ImageProvider
+                : FileImage(File(filePath)),
         minScale: PhotoViewComputedScale.contained,
         maxScale: PhotoViewComputedScale.covered * 4,
         backgroundDecoration: const BoxDecoration(color: Colors.black),
@@ -493,6 +496,16 @@ class _TappableImageCard extends StatelessWidget {
                           );
                         },
                         errorBuilder: (context, error, stackTrace) => _ImageErrorWidget(
+                          filePath: filePath,
+                          error: error.toString(),
+                        ),
+                      )
+                    : kIsWeb
+                    ? Image.network(
+                        filePath,
+                        fit: BoxFit.cover,
+                        errorBuilder: (context, error, stackTrace) =>
+                            _ImageErrorWidget(
                           filePath: filePath,
                           error: error.toString(),
                         ),

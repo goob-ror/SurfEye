@@ -20,6 +20,11 @@ class ApiService {
     int brightness = 0,
     double contrast = 1.0,
     int edgeSensitivity = 50,
+    // Explicit ellipse params (pixel coords) — send when user has detected/dragged
+    double? cx,
+    double? cy,
+    double? semiA,
+    double? semiB,
     double? ellipseAngle,
     double? ellipseScaleA,
     double? ellipseScaleB,
@@ -50,6 +55,12 @@ class ApiService {
       request.fields['brightness'] = brightness.toString();
       request.fields['contrast'] = contrast.toString();
       request.fields['edge_sensitivity'] = edgeSensitivity.toString();
+
+      // Send explicit ellipse if user has already detected / dragged handles
+      if (cx != null)    request.fields['cx']     = cx.toString();
+      if (cy != null)    request.fields['cy']     = cy.toString();
+      if (semiA != null) request.fields['semi_a'] = semiA.toString();
+      if (semiB != null) request.fields['semi_b'] = semiB.toString();
 
       // Add ellipse fine-tuning parameters if provided
       if (ellipseAngle != null) {
@@ -100,6 +111,62 @@ class ApiService {
     return analyzeImage(imagePath);
   }
 
+  /// POST /detect — runs HoughCircles droplet detection and returns ellipse
+  /// parameters [cx, cy, semi_a, semi_b, angle_deg] in image pixel coordinates,
+  /// without performing full WCA analysis.
+  /// Also accepts [baselineY], [brightness], [contrast], [edgeSensitivity] and
+  /// an optional [dropletBbox] to constrain detection to a region.
+  /// Returns map with keys: cx, cy, semi_a, semi_b, angle_deg, detected_baseline_y
+  static Future<Map<String, dynamic>?> detectDroplet(
+    String imagePath, {
+    int? baselineY,
+    Rect? dropletBbox,
+    int brightness = 0,
+    double contrast = 1.0,
+    int edgeSensitivity = 50,
+  }) async {
+    try {
+      final request = http.MultipartRequest(
+        'POST',
+        Uri.parse('${AppConfig.baseUrl}/detect'),
+      );
+
+      request.files.add(await _createMultipartFile('file', imagePath));
+
+      if (baselineY != null) {
+        request.fields['baseline_y'] = baselineY.toString();
+      }
+      if (dropletBbox != null) {
+        request.fields['droplet_x1'] = dropletBbox.left.toString();
+        request.fields['droplet_y1'] = dropletBbox.top.toString();
+        request.fields['droplet_x2'] = dropletBbox.right.toString();
+        request.fields['droplet_y2'] = dropletBbox.bottom.toString();
+      }
+      request.fields['brightness'] = brightness.toString();
+      request.fields['contrast'] = contrast.toString();
+      request.fields['edge_sensitivity'] = edgeSensitivity.toString();
+
+      final streamed = await _client
+          .send(request)
+          .timeout(const Duration(seconds: 30));
+
+      final body = await streamed.stream.bytesToString();
+
+      if (streamed.statusCode != 200) {
+        debugPrint('ApiService.detectDroplet HTTP ${streamed.statusCode}: $body');
+        return null;
+      }
+
+      return jsonDecode(body) as Map<String, dynamic>;
+    } on SocketException catch (e) {
+      debugPrint('ApiService.detectDroplet network error: $e');
+      return null;
+    } catch (e) {
+      debugPrint('ApiService.detectDroplet error: $e');
+      return null;
+    }
+  }
+
   /// POST /preview — generates a live preview of preprocessing effects
   /// without running full analysis. Shows edges overlay and baseline.
   /// Returns quickly for real-time feedback as settings change.
@@ -108,6 +175,7 @@ class ApiService {
     int brightness = 0,
     double contrast = 1.0,
     int edgeSensitivity = 50,
+    int sharpness = 0,
     int? baselineY,
   }) async {
     try {
@@ -124,6 +192,7 @@ class ApiService {
       request.fields['brightness'] = brightness.toString();
       request.fields['contrast'] = contrast.toString();
       request.fields['edge_sensitivity'] = edgeSensitivity.toString();
+      request.fields['sharpness'] = sharpness.toString();
 
       if (baselineY != null) {
         request.fields['baseline_y'] = baselineY.toString();

@@ -67,7 +67,7 @@
   }
 
   String get category {
-    if (angle < 10) return 'Super-Hidrofilik';
+    if (angle < 5) return 'Super-Hidrofilik';
     if (angle < 90) return 'Hidrofilik';
     if (angle < 150) return 'Hidrofobik';
     return 'Super-Hidrofobik';
