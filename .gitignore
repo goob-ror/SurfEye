@@ -102,3 +102,6 @@ NewAPI
 API.zip
 test.zip
 report.md
+flowchart.md
+implementation_detail.md
+integration.md
