@@ -315,6 +315,9 @@ def _draw_annotated(
     onto a copy of the original image.  Matches test2.py _save_result() exactly.
     """
     out = image_orig.copy()
+    out = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY)
+    _, out = cv2.threshold(out, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+    out = cv2.cvtColor(out, cv2.COLOR_GRAY2BGR)
     h, w = out.shape[:2]
 
     # ── Baseline ──────────────────────────────────────────────────────────────

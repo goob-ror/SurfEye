@@ -12,6 +12,7 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
+import 'package:surfeye_app/config/app_config.dart';
 import 'package:surfeye_app/models/measurement.dart';
 import 'package:surfeye_app/services/api_service.dart';
 import 'package:surfeye_app/services/calibration_storage.dart';
@@ -433,8 +434,13 @@ class _CalibrationScreenState extends State<CalibrationScreen>
           ?? (r['right_angle'] as num?)?.toDouble();
 
       final surface  = r['classification'] as String? ?? 'Tidak Diketahui';
-      final annPath  = r['annotated_image_path'] as String? ?? widget.imagePath;
-      final edgePath = r['edge_image_path'] as String?;
+      // Store the server-RELATIVE path, not the absolute ngrok URL.
+      // Absolute URLs pin each row to whatever domain was live at capture time,
+      // so every row breaks on the next ngrok restart. The read path rebases
+      // these onto the current AppConfig.baseUrl on the way out.
+      final annPath  = AppConfig.toRelativePath(
+          r['annotated_image_path'] as String? ?? widget.imagePath);
+      final edgePath = AppConfig.toRelativePath(r['edge_image_path'] as String?);
 
       final m = Measurement(
         id: 0, angle: angle, surface: surface,
@@ -836,7 +842,7 @@ class _CalibrationScreenState extends State<CalibrationScreen>
                 });
               },
               child: Stack(alignment: Alignment.center, children: [
-                Container(height: 2, color: _C.yellow),
+                Container(height: 0.8, color: _C.yellow),
                 Positioned(
                   left: 10,
                   child: Row(
@@ -1643,7 +1649,7 @@ class _BoxPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size sz) {
-    final stroke = Paint()..style = PaintingStyle.stroke..strokeWidth = 2.0;
+    final stroke = Paint()..style = PaintingStyle.stroke..strokeWidth = 0.8;
     final fill   = Paint()..style = PaintingStyle.fill;
 
     void drawRect(Rect norm, Color c, {bool dashed = false}) {
@@ -1661,7 +1667,7 @@ class _BoxPainter extends CustomPainter {
       }
       final hp = Paint()..color = c..style = PaintingStyle.fill;
       for (final o in [r.topLeft, r.topRight, r.bottomLeft, r.bottomRight]) {
-        canvas.drawCircle(o, 5, hp);
+        canvas.drawCircle(o, 2.5, hp);
       }
     }
 
@@ -1719,11 +1725,11 @@ class _EllipsePainter extends CustomPainter {
     // ── Ellipse — thin semi-transparent stroke ───────────────────────────
     final glowPaint = Paint()
       ..color = const Color(0xFF10B981).withValues(alpha: 0.10)
-      ..strokeWidth = 5
+      ..strokeWidth = 2
       ..style = PaintingStyle.stroke;
     final linePaint = Paint()
       ..color = const Color(0xFF10B981).withValues(alpha: 0.70)
-      ..strokeWidth = 1.5
+      ..strokeWidth = 0.7
       ..style = PaintingStyle.stroke;
 
     final ellipsePath = Path();
@@ -1741,7 +1747,7 @@ class _EllipsePainter extends CustomPainter {
     // ── Axis lines ───────────────────────────────────────────────────────
     final axPaint = Paint()
       ..color = Colors.white.withValues(alpha: 0.22)
-      ..strokeWidth = 1.0
+      ..strokeWidth = 0.5
       ..style = PaintingStyle.stroke;
     final handles = [
       Offset(cx, cy),
@@ -1762,10 +1768,10 @@ class _EllipsePainter extends CustomPainter {
       Color(0xFF06B6D4),
     ];
     for (int i = 0; i < handles.length; i++) {
-      canvas.drawCircle(handles[i], 6,
+      canvas.drawCircle(handles[i], 4,
           Paint()..color = handleColors[i].withValues(alpha: 0.75)..style = PaintingStyle.fill);
-      canvas.drawCircle(handles[i], 6,
-          Paint()..color = Colors.white.withValues(alpha: 0.5)..strokeWidth = 1.2
+      canvas.drawCircle(handles[i], 4,
+          Paint()..color = Colors.white.withValues(alpha: 0.5)..strokeWidth = 0.6
               ..style = PaintingStyle.stroke);
     }
 
@@ -1787,7 +1793,7 @@ class _EllipsePainter extends CustomPainter {
 
     final linePaint = Paint()
       ..style      = PaintingStyle.stroke
-      ..strokeWidth = 2.0;
+      ..strokeWidth = 0.8;
 
     final dotPaint  = Paint()
       ..style = PaintingStyle.fill
@@ -1802,12 +1808,12 @@ class _EllipsePainter extends CustomPainter {
     // ── Contact point dots ──────────────────────────────────────────────
     final dotBorder = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.5
+      ..strokeWidth = 0.6
       ..color = Colors.white;
-    canvas.drawCircle(Offset(lx, ly), 5, dotPaint);
-    canvas.drawCircle(Offset(lx, ly), 5, dotBorder);
-    canvas.drawCircle(Offset(rx, ry), 5, dotPaint);
-    canvas.drawCircle(Offset(rx, ry), 5, dotBorder);
+    canvas.drawCircle(Offset(lx, ly), 3, dotPaint);
+    canvas.drawCircle(Offset(lx, ly), 3, dotBorder);
+    canvas.drawCircle(Offset(rx, ry), 3, dotPaint);
+    canvas.drawCircle(Offset(rx, ry), 3, dotBorder);
 
     // ── LEFT contact ────────────────────────────────────────────────────
     // Tangent line (upward into droplet)
@@ -1865,7 +1871,7 @@ class _EllipsePainter extends CustomPainter {
         final ey = cy + a * math.cos(t) * sinA + b * math.sin(t) * cosA;
         final pt = Offset(ex, ey);
         if (prev == null || (pt - prev).distance >= minDist) {
-          canvas.drawCircle(pt, 2.5, dotPaint);
+          canvas.drawCircle(pt, 1.2, dotPaint);
           prev = pt;
         }
       }

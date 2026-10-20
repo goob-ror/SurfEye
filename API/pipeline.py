@@ -489,8 +489,9 @@ def _visualize_to_file(img, edges, baseline_y, points, result, output_path: str)
         circ = result["circle_detection"]
         cv2.circle(vis, (circ["center_x"], circ["center_y"]), circ["radius"], (0, 255, 255), 1, cv2.LINE_AA)
 
-    # Save annotated image as WebP
-    cv2.imwrite(output_path, vis, [cv2.IMWRITE_WEBP_QUALITY, 90])
+    # Save annotated image as WebP in black and white
+    vis_gray = cv2.cvtColor(vis, cv2.COLOR_BGR2GRAY)
+    cv2.imwrite(output_path, vis_gray, [cv2.IMWRITE_WEBP_QUALITY, 90])
 
 
 def _visualize(img, edges, baseline_y, points, result):
