@@ -111,12 +111,13 @@ class ApiService {
     return analyzeImage(imagePath);
   }
 
-  /// POST /detect — runs HoughCircles droplet detection and returns ellipse
+  /// POST /detect — runs automatic droplet detection and returns ellipse
   /// parameters [cx, cy, semi_a, semi_b, angle_deg] in image pixel coordinates,
   /// without performing full WCA analysis.
   /// Also accepts [baselineY], [brightness], [contrast], [edgeSensitivity] and
   /// an optional [dropletBbox] to constrain detection to a region.
-  /// Returns map with keys: cx, cy, semi_a, semi_b, angle_deg, detected_baseline_y
+  /// Returns map with keys: cx, cy, semi_a, semi_b, angle_deg,
+  /// detected_baseline_y, confidence, baseline_confidence.
   static Future<Map<String, dynamic>?> detectDroplet(
     String imagePath, {
     int? baselineY,

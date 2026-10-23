@@ -294,6 +294,22 @@ class _CalibrationScreenState extends State<CalibrationScreen>
 
       if (wca == null) {
         _showSnack('Tetesan terdeteksi tetapi WCA tidak dapat dihitung. Sesuaikan baseline.');
+      } else {
+        // Tell the operator when the automatic fit is weak, so they can nudge
+        // the handles instead of trusting a borderline ellipse.
+        final conf = (r['confidence'] as num?)?.toDouble();
+        final baseConf = (r['baseline_confidence'] as num?)?.toDouble();
+        if (conf != null && conf < 0.55) {
+          _showSnack(
+            'Deteksi otomatis kurang yakin (${(conf * 100).round()}%). '
+            'Silakan sesuaikan elips secara manual.',
+          );
+        } else if (baseConf != null && baseConf < 0.45) {
+          _showSnack(
+            'Garis dasar kurang yakin (${(baseConf * 100).round()}%). '
+            'Geser baseline bila perlu.',
+          );
+        }
       }
     } catch (e) {
       if (mounted) _showSnack('Kesalahan: $e');

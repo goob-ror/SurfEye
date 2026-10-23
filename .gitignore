@@ -105,3 +105,11 @@ report.md
 flowchart.md
 implementation_detail.md
 integration.md
+API/_bench_compare.py
+API/_bench_current.json
+API/_bench_detect.py
+API/_bench_synth.json
+API/_bench_synth.py
+API/_compare_out.txt
+API/_synth_out.txt
+API/_vis_out.txt

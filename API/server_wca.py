@@ -1,11 +1,31 @@
 """
-SurfEye WCA API server — self-contained, powered by test2.py logic.
+SurfEye WCA API server  (v2 — ROI-constrained detection)
 
-All detection and computation comes from the three helper functions in test2.py:
-  • adjust_brightness_contrast()
-  • find_substrate_top()       → baseline auto-detection
-  • detect_droplet_ellipse()   → HoughCircles droplet fit
-  • compute_wca()              → tangent-based contact angle
+What changed compared with the previous version
+───────────────────────────────────────────────
+  • When the operator locks a Region (bbox), detection now runs ONLY inside it:
+      – edges are extracted from the crop, restricted to the area ABOVE the
+        baseline (surface texture, baseline edge and reflection are excluded)
+      – a RANSAC circle fit finds the droplet arc; the circle must be
+        geometrically consistent with the box (contact points + apex inside it)
+      – the inliers are refined with cv2.fitEllipse (kept only if it fits
+        clearly better and passes sanity checks)
+      – any fallback result (auto_detect.py / legacy) that falls outside the
+        box is REJECTED (422) instead of silently returned.
+  • Bbox may be sent in pixels OR normalised 0-1 (the Flutter /analyze call
+    sends normalised values) — the server now handles both.
+  • cv2.fitEllipse axis/angle pairing fixed in the legacy path.
+  • Legacy Hough fallback now checks containment and no longer drops to
+    param2 < 20.
+  • Edge-sensitivity now means the same thing in /detect and /preview
+    (higher = more edges).
+  • /detect and /analyze return a `warnings` list (e.g. saturated pixels from
+    brightness/contrast) and a real `confidence`.
+  • /analyze no longer applies ellipse_scale_a/b on top of explicit ellipse
+    params (the app already applies the scale to the ellipse it sends, so
+    the old code scaled twice).  The scalars are still honoured when the
+    server auto-detects.
+  • /analyze also returns edge_image_path and method for the app's model.
 
 Endpoints
 ─────────
@@ -32,14 +52,25 @@ import uuid
 import cv2
 import numpy as np
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
-# ── Try to load port / ngrok token from .env (optional) ───────────────────────
+# Optional improved detector.  Used only when no ROI is locked, or as a
+# fallback (validated against the ROI) when the ROI-constrained fit fails.
+try:
+    from auto_detect import (
+        find_substrate as _find_substrate_new,
+        detect_droplet as _detect_droplet_new,
+    )
+    _HAVE_AUTO_DETECT = True
+except ImportError:                                   # pragma: no cover
+    _HAVE_AUTO_DETECT = False
+
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
-    pass  # python-dotenv not required
+    pass
 
 DEFAULT_PORT = int(os.getenv("PORT", "8000"))
 NGROK_TOKEN  = os.getenv("NGROK_AUTHTOKEN", "")
@@ -47,10 +78,11 @@ NGROK_TOKEN  = os.getenv("NGROK_AUTHTOKEN", "")
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-from fastapi.middleware.cors import CORSMiddleware
+# Pixels kept clear above the baseline when extracting droplet edges, so the
+# baseline edge itself / shadow / reflection never enter the fit.
+BASELINE_GUARD_PX = 2
 
 app = FastAPI(title="SurfEye WCA API")
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -58,8 +90,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
 # ══════════════════════════════════════════════════════════════════════════════
-#  CORE FUNCTIONS  (ported verbatim from test2.py)
+#  PREPROCESSING
 # ══════════════════════════════════════════════════════════════════════════════
 
 def adjust_brightness_contrast(gray: np.ndarray, brightness: int, contrast: float) -> np.ndarray:
@@ -69,14 +103,28 @@ def adjust_brightness_contrast(gray: np.ndarray, brightness: int, contrast: floa
     return np.clip(img, 0, 255).astype(np.uint8)
 
 
+def canny_thresholds(edge_sensitivity: int) -> tuple[int, int]:
+    """Higher sensitivity → lower thresholds → more edges (same as /preview)."""
+    s = int(np.clip(edge_sensitivity, 10, 150))
+    return max(10, 100 - s), max(20, 200 - s)
+
+
+def edge_map(gray_adj: np.ndarray, edge_sensitivity: int) -> np.ndarray:
+    lo, hi = canny_thresholds(edge_sensitivity)
+    return cv2.Canny(cv2.GaussianBlur(gray_adj, (5, 5), 1.5), lo, hi)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  BASELINE
+# ══════════════════════════════════════════════════════════════════════════════
+
 def find_substrate_top(gray: np.ndarray) -> int:
-    """Scan centre column strip upward to find the substrate surface top edge."""
+    """Legacy: scan centre column strip upward to find the substrate top edge."""
     h, w = gray.shape
     cx = w // 2
     strip = gray[:, max(0, cx - 60):cx + 60].mean(axis=1).astype(float)
     start = int(h * 0.55)
 
-    # Find dark zone (mean < 50) near bottom → substrate is just above it
     for r in range(h - 1, start, -1):
         if strip[r] < 50:
             dark_bottom = r
@@ -88,7 +136,6 @@ def find_substrate_top(gray: np.ndarray) -> int:
                     return max(start, r2 - 150)
             break
 
-    # No dark zone (white substrate like Teflon): find peak then its upper edge
     seg = strip[start:]
     peak_offset = int(np.argmax(seg))
     peak_val    = seg[peak_offset]
@@ -99,25 +146,237 @@ def find_substrate_top(gray: np.ndarray) -> int:
     return int(h * 0.75)
 
 
+def auto_find_substrate(gray: np.ndarray) -> tuple[int, float]:
+    """Return (baseline_y, confidence)."""
+    if _HAVE_AUTO_DETECT:
+        return _find_substrate_new(gray)
+    return find_substrate_top(gray), 0.5
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  ROI HELPERS
+# ══════════════════════════════════════════════════════════════════════════════
+
+def parse_bbox(x1, y1, x2, y2, w: int, h: int) -> tuple[float, float, float, float] | None:
+    """
+    Accept pixel OR normalised (0-1) coordinates; return clipped pixel bbox.
+    Returns None when no bbox was supplied or it is degenerate.
+    """
+    vals = [x1, y1, x2, y2]
+    if any(v is None for v in vals):
+        return None
+    vals = [float(v) for v in vals]
+    if max(vals) <= 1.5 and w > 2 and h > 2:       # normalised
+        vals = [vals[0] * w, vals[1] * h, vals[2] * w, vals[3] * h]
+    bx1, bx2 = sorted((vals[0], vals[2]))
+    by1, by2 = sorted((vals[1], vals[3]))
+    bx1, by1 = max(0.0, bx1), max(0.0, by1)
+    bx2, by2 = min(float(w), bx2), min(float(h), by2)
+    if bx2 - bx1 < 20 or by2 - by1 < 20:
+        return None
+    return bx1, by1, bx2, by2
+
+
+def _roi_margin(bbox) -> float:
+    return 0.04 * (bbox[2] - bbox[0]) + 4.0
+
+
+def _geometry_ok(cx: float, cy: float, r: float, by: float, bbox, margin: float) -> bool:
+    """
+    A droplet cap is a circle arc above the baseline.  The circle itself may be
+    larger than the cap (contact angle < 90°), so containment is tested on the
+    VISIBLE part only:
+        centre above baseline → widest point (cx ± r) is visible
+        centre below baseline → widest visible points are the contact points
+    """
+    x1, y1, x2, y2 = bbox
+    bw, bh = x2 - x1, y2 - y1
+    if r < 10 or r > 4.0 * max(bw, bh):
+        return False
+    dy = cy - by                                   # >0: centre below baseline
+    if abs(dy) >= r:                               # must cross baseline twice
+        return False
+    half_chord = float(np.sqrt(r * r - dy * dy))
+    half_w = r if dy < 0 else half_chord
+    if cx - half_w < x1 - margin or cx + half_w > x2 + margin:
+        return False
+    if cy - r < y1 - margin:                       # apex inside the box
+        return False
+    return True
+
+
+def _ellipse_in_bbox(ell: list[float], by: float, bbox) -> bool:
+    """Final gate for any ellipse returned while a ROI is locked."""
+    res = compute_wca(ell, int(round(by)))
+    if res is None:
+        return False
+    x1, y1, x2, y2 = bbox
+    m = _roi_margin(bbox)
+    lp, rp = res[2], res[3]
+    if lp[0] < x1 - m or rp[0] > x2 + m:
+        return False
+    cx, cy, a, b, ang = ell
+    if not (x1 - m <= cx <= x2 + m):
+        return False
+    t = np.deg2rad(ang)
+    half_h = float(np.sqrt((a * np.sin(t)) ** 2 + (b * np.cos(t)) ** 2))
+    return cy - half_h >= y1 - m
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  ROI-CONSTRAINED DROPLET DETECTION  (RANSAC circle → optional ellipse refine)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _circle_from_3(p: np.ndarray):
+    A = np.c_[2 * p[:, 0], 2 * p[:, 1], np.ones(3)]
+    rhs = (p ** 2).sum(axis=1)
+    try:
+        cx, cy, c = np.linalg.solve(A, rhs)
+    except np.linalg.LinAlgError:
+        return None
+    r2 = c + cx * cx + cy * cy
+    if r2 <= 0:
+        return None
+    return float(cx), float(cy), float(np.sqrt(r2))
+
+
+def _ransac_circle(pts: np.ndarray, bbox, by: float, tol: float,
+                   iters: int = 1500, seed: int = 0):
+    rng = np.random.default_rng(seed)
+    n = len(pts)
+    margin = _roi_margin(bbox)
+    best = None
+    for _ in range(iters):
+        c = _circle_from_3(pts[rng.choice(n, 3, replace=False)])
+        if c is None:
+            continue
+        cx, cy, r = c
+        if not _geometry_ok(cx, cy, r, by, bbox, margin):
+            continue
+        d = np.abs(np.hypot(pts[:, 0] - cx, pts[:, 1] - cy) - r)
+        cnt = int((d < tol).sum())
+        if best is None or cnt > best[0]:
+            best = (cnt, cx, cy, r)
+    return best
+
+
+def _ellipse_rms(pts: np.ndarray, ell: list[float]) -> float:
+    cx, cy, a, b, ang = ell
+    t = np.deg2rad(ang)
+    c, s = np.cos(t), np.sin(t)
+    dx, dy = pts[:, 0] - cx, pts[:, 1] - cy
+    u, v = dx * c + dy * s, -dx * s + dy * c
+    rho = np.sqrt((u / a) ** 2 + (v / b) ** 2)
+    d = np.abs(rho - 1.0) * np.sqrt(a * b)         # first-order distance
+    return float(np.sqrt(np.mean(d ** 2)))
+
+
+def _fit_confidence(inl: np.ndarray, n_pts: int, cx: float, cy: float, r: float,
+                    by: float, bbox) -> float:
+    """0..1 from inlier fraction, angular coverage of the visible arc, ROI touch."""
+    inlier_frac = len(inl) / max(n_pts, 1)
+    ang = np.arctan2(inl[:, 1] - cy, inl[:, 0] - cx) % (2 * np.pi)
+    bins = np.unique((ang // (np.pi / 12)).astype(int))
+    s = float(np.clip((by - cy) / r, -1.0, 1.0))
+    arc = np.pi + 2 * np.arcsin(s)
+    expected = max(arc / (np.pi / 12), 1.0)
+    coverage = min(1.0, len(bins) / (0.85 * expected))
+    conf = 0.5 * min(1.0, inlier_frac / 0.45) + 0.5 * coverage
+
+    x1, y1, x2, y2 = bbox
+    dy = cy - by
+    half_w = r if dy < 0 else float(np.sqrt(max(r * r - dy * dy, 0.0)))
+    if cx - half_w < x1 + 2 or cx + half_w > x2 - 2 or cy - r < y1 + 2:
+        conf *= 0.75                                # fit presses against the ROI
+    return float(np.clip(conf, 0.0, 1.0))
+
+
+def detect_droplet_bbox(
+    gray_adj: np.ndarray,
+    sub_top: int,
+    edge_sensitivity: int,
+    bbox: tuple[float, float, float, float],
+) -> tuple[list[float] | None, float]:
+    """
+    Detect the droplet strictly inside `bbox`, using only pixels above the
+    baseline.  Returns ([cx, cy, a, b, angle_deg], confidence) or (None, 0).
+    """
+    h, w = gray_adj.shape
+    x1 = max(0, int(round(bbox[0]))); y1 = max(0, int(round(bbox[1])))
+    x2 = min(w, int(round(bbox[2])));  y2 = min(h, int(round(bbox[3])))
+    y_cut = min(y2, sub_top - BASELINE_GUARD_PX)
+    if x2 - x1 < 20 or y_cut - y1 < 20:
+        return None, 0.0
+
+    box = (float(x1), float(y1), float(x2), float(y2))
+    roi = gray_adj[y1:y_cut, x1:x2]
+    roi_h, roi_w = roi.shape
+    blurred = cv2.GaussianBlur(roi, (5, 5), 1.5)
+    lo, hi = canny_thresholds(edge_sensitivity)
+    tol = max(2.0, 0.01 * max(roi_w, roi_h))
+    rng = np.random.default_rng(1)
+
+    best = None                                     # (conf, cx, cy, r, inliers, pts)
+    for scale in (1.0, 0.6, 0.35):
+        edges = cv2.Canny(blurred, max(5, int(lo * scale)), max(15, int(hi * scale)))
+        ys, xs = np.nonzero(edges)
+        keep = (xs > 2) & (xs < roi_w - 3) & (ys > 2)
+        xs, ys = xs[keep], ys[keep]
+        if len(xs) < 40:
+            continue
+        pts_all = np.c_[xs + x1, ys + y1].astype(np.float64)
+        pts = pts_all
+        if len(pts) > 2000:
+            pts = pts[rng.choice(len(pts), 2000, replace=False)]
+
+        res = _ransac_circle(pts, box, float(sub_top), tol)
+        if res is None:
+            continue
+        _, cx, cy, r = res
+        d = np.abs(np.hypot(pts_all[:, 0] - cx, pts_all[:, 1] - cy) - r)
+        inl = pts_all[d < tol]
+        if len(inl) < 25:
+            continue
+        conf = _fit_confidence(inl, len(pts_all), cx, cy, r, float(sub_top), box)
+        if best is None or conf > best[0]:
+            best = (conf, cx, cy, r, inl)
+        if conf >= 0.7:
+            break
+
+    if best is None:
+        return None, 0.0
+
+    conf, cx, cy, r, inl = best
+    circle = [cx, cy, r, r, 0.0]
+
+    # Optional ellipse refinement on the inliers
+    try:
+        (ex, ey), (ma, mi), ang = cv2.fitEllipse(inl.astype(np.float32).reshape(-1, 1, 2))
+        # cv2: `ang` is the rotation of the FIRST axis (ma) — keep that pairing
+        cand = [float(ex), float(ey), ma / 2.0, mi / 2.0, float(ang)]
+        ratio = max(cand[2], cand[3]) / max(min(cand[2], cand[3]), 1e-6)
+        if (min(cand[2], cand[3]) >= 5 and ratio <= 1.6
+                and _ellipse_in_bbox(cand, float(sub_top), box)
+                and _ellipse_rms(inl, cand) < 0.85 * _ellipse_rms(inl, circle)):
+            return cand, conf
+    except cv2.error:
+        pass
+    return circle, conf
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  LEGACY DETECTOR  (fallback only; used when no ROI is locked)
+# ══════════════════════════════════════════════════════════════════════════════
+
 def detect_droplet_ellipse(
     gray_adj: np.ndarray,
     sub_top: int,
     canny_thresh: int,
-    bbox: tuple[int, int, int, int] | None = None,
+    bbox: tuple[float, float, float, float] | None = None,
 ) -> list[float] | None:
-    """
-    Detect droplet using two-stage approach:
-    1) Contour-based ellipse fitting (handles clear semi-circular droplets well)
-    2) HoughCircles fallback
-
-    Returns [cx, cy, semi_a, semi_b, angle_deg] in image-pixel coords,
-    or None if nothing was found.
-
-    bbox: optional (x1, y1, x2, y2) pixel crop to constrain search region.
-    """
+    """Contour-based ellipse fit with HoughCircles fallback."""
     h, w = gray_adj.shape
 
-    # Restrict to bbox if provided, otherwise full width above substrate
     if bbox is not None:
         x1, y1, x2, y2 = (int(v) for v in bbox)
         x1 = max(0, x1); y1 = max(0, y1)
@@ -128,108 +387,118 @@ def detect_droplet_ellipse(
         roi_top_offset = max(0, sub_top - 500)
         roi = gray_adj[roi_top_offset:sub_top + 10, :]
         x1 = 0
+        x2 = w
 
     if roi.size == 0:
         return None
-
     roi_h, roi_w = roi.shape
 
-    # ── Stage 1: Contour-based ellipse fitting ────────────────────────────────
+    # Stage 1: contour ellipse
     blurred = cv2.GaussianBlur(roi, (5, 5), 1.5)
     best_contour_result = None
-
     for lo_thresh in [max(10, canny_thresh // 3), max(5, canny_thresh // 5), 5]:
-        hi_thresh = lo_thresh * 3
-        edges = cv2.Canny(blurred, lo_thresh, hi_thresh)
-
+        edges = cv2.Canny(blurred, lo_thresh, lo_thresh * 3)
         contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-
         for cnt in contours:
-            if len(cnt) < 5:
+            if len(cnt) < 5 or cv2.contourArea(cnt) < 200:
                 continue
-            # Minimum area to avoid noise
-            area = cv2.contourArea(cnt)
-            if area < 200:
-                continue
-
-            # Check bounding box is reasonable (not too thin)
-            rx, ry, rw, rh = cv2.boundingRect(cnt)
+            _, _, rw, rh = cv2.boundingRect(cnt)
             if rw < 20 or rh < 15:
                 continue
-
             try:
-                (ecx, ecy), (ma, Mi), angle = cv2.fitEllipse(cnt)
+                (ecx, ecy), (ma, mi), angle = cv2.fitEllipse(cnt)
             except Exception:
                 continue
-
-            semi_a = max(ma, Mi) / 2.0
-            semi_b = min(ma, Mi) / 2.0
-
-            # Convert to full-image coords
-            ecx_full = ecx + x1
-            ecy_full = ecy + roi_top_offset
-
-            # Aspect ratio: semi-circular droplet should be roughly 0.3..3.0
-            if semi_b < 1e-3:
+            semi_a, semi_b = ma / 2.0, mi / 2.0      # keep cv2's axis/angle pairing
+            if min(semi_a, semi_b) < 1e-3:
                 continue
-            aspect = semi_a / semi_b
-            if aspect > 5.0 or aspect < 0.2:
+            aspect = max(semi_a, semi_b) / min(semi_a, semi_b)
+            if aspect > 5.0:
                 continue
-
-            # Droplet bottom must be near (but not below) the baseline
-            bottom = ecy_full + semi_b
-            if bottom > sub_top + max(10.0, semi_b * 0.15):
+            ecx_full, ecy_full = ecx + x1, ecy + roi_top_offset
+            bottom = ecy_full + max(semi_a, semi_b)
+            if bottom > sub_top + max(10.0, min(semi_a, semi_b) * 0.15):
                 continue
-            dist_to_baseline = abs(bottom - sub_top)
-
-            score = area - dist_to_baseline * 2.0
+            area = cv2.contourArea(cnt)
+            score = area - abs(bottom - sub_top) * 2.0
             if best_contour_result is None or score > best_contour_result[0]:
                 best_contour_result = (score, [ecx_full, ecy_full, semi_a, semi_b, float(angle)])
-
         if best_contour_result is not None:
-            break  # Found a good contour, skip looser thresholds
-
+            break
     if best_contour_result is not None:
         return best_contour_result[1]
 
-    # ── Stage 2: HoughCircles fallback ────────────────────────────────────────
+    # Stage 2: HoughCircles (with containment + stricter accumulator)
     blurred_h = cv2.GaussianBlur(roi, (9, 9), 2)
-    candidate_circles: list[tuple[float, float, float]] = []
-    for p2 in [30, 25, 20, 15, 10]:
+    cands: list[tuple[float, float, float]] = []
+    for p2 in [35, 30, 25, 20]:
         circles = cv2.HoughCircles(
-            blurred_h, cv2.HOUGH_GRADIENT, dp=1.5,
-            minDist=40, param1=canny_thresh, param2=p2,
+            blurred_h, cv2.HOUGH_GRADIENT, dp=1.5, minDist=40,
+            param1=max(canny_thresh, 20), param2=p2,
             minRadius=15, maxRadius=max(roi_w, roi_h),
         )
         if circles is not None:
             for c in circles[0]:
-                cx_roi, cy_roi, r = c
-                candidate_circles.append((cx_roi + x1, cy_roi + roi_top_offset, r))
-
-    if not candidate_circles:
+                cands.append((c[0] + x1, c[1] + roi_top_offset, c[2]))
+    if not cands:
         return None
 
-    best       = None
-    best_score = -1.0
-    for cx, cy, r in candidate_circles:
-        if cy + r > sub_top + max(10.0, r * 0.15):
+    box = (float(x1), float(roi_top_offset), float(x2), float(roi_top_offset + roi_h))
+    margin = _roi_margin(box)
+    best, best_score = None, -1.0
+    for cx, cy, r in cands:
+        if bbox is not None and not _geometry_ok(cx, cy, r, float(sub_top), box, margin):
             continue
-        votes = sum(
-            1 for cx2, cy2, r2 in candidate_circles
-            if abs(cx2 - cx) < 25 and abs(cy2 - cy) < 25 and abs(r2 - r) < 25
-        )
-        dist  = abs((cy + r) - sub_top)
-        score = votes * 10 - dist * 0.05
+        if cy + r > sub_top + max(10.0, r * 0.15) and cy < sub_top:
+            pass  # cap larger than circle bottom is fine; handled by geometry check
+        votes = sum(1 for cx2, cy2, r2 in cands
+                    if abs(cx2 - cx) < 25 and abs(cy2 - cy) < 25 and abs(r2 - r) < 25)
+        score = votes * 10 - abs(cy - sub_top) * 0.05
         if score > best_score:
-            best_score = score
-            best = (int(cx), int(cy), int(r))
-
+            best_score, best = score, (cx, cy, r)
     if best is None:
         return None
-
     cx, cy, r = best
     return [float(cx), float(cy), float(r), float(r), 0.0]
 
+
+def auto_detect_ellipse(
+    gray_adj: np.ndarray,
+    sub_top: int,
+    edge_sensitivity: int = 50,
+    bbox: tuple[float, float, float, float] | None = None,
+) -> tuple[list[float] | None, float]:
+    """
+    Dispatcher.
+      • ROI locked  → ROI-constrained RANSAC fit first.  If that fails, the
+        other detectors may try, but their result must pass the ROI gate.
+      • No ROI      → auto_detect.py if present, else legacy.
+    """
+    if bbox is not None:
+        ell, conf = detect_droplet_bbox(gray_adj, sub_top, edge_sensitivity, bbox)
+        if ell is not None:
+            return ell, conf
+
+    ell, conf = None, 0.0
+    if _HAVE_AUTO_DETECT:
+        try:
+            ell, conf = _detect_droplet_new(gray_adj, sub_top, edge_sensitivity, bbox)
+        except Exception:
+            ell, conf = None, 0.0
+    if ell is None:
+        ell = detect_droplet_ellipse(gray_adj, sub_top, edge_sensitivity, bbox)
+        conf = 0.5 if ell is not None else 0.0
+
+    if ell is not None and bbox is not None:
+        if not _ellipse_in_bbox(ell, float(sub_top), bbox):
+            return None, 0.0                        # never return a fit outside the ROI
+        conf = min(conf, 0.5)                       # fallback result: ask operator to check
+    return ell, conf
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  WCA
+# ══════════════════════════════════════════════════════════════════════════════
 
 def compute_wca(
     ellipse: list[float],
@@ -238,11 +507,9 @@ def compute_wca(
     """
     Compute WCA from ellipse [cx, cy, semi_a, semi_b, angle_deg] and baseline_y.
 
-    Returns:
-        (left_wca, right_wca,
-         contact_left (x,y), contact_right (x,y),
-         left_tangent (dx,dy), right_tangent (dx,dy))
-    or None if the ellipse does not cross the baseline at two points.
+    Returns (left_wca, right_wca, contact_left, contact_right,
+             left_tangent, right_tangent) or None if the ellipse does not
+    cross the baseline at two points.
     """
     cx, cy, a, b, angle_deg = ellipse
     angle_rad = np.deg2rad(angle_deg)
@@ -304,38 +571,42 @@ def compute_wca(
     )
 
 
+def _classify(avg_angle: float) -> str:
+    if avg_angle > 150:
+        return "Superhydrophobic"
+    if avg_angle > 90:
+        return "Hydrophobic"
+    return "Hydrophilic"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  DRAWING
+# ══════════════════════════════════════════════════════════════════════════════
+
 def _draw_annotated(
     image_orig: np.ndarray,
     ellipse: list[float],
     baseline_y: int,
     wca_result: tuple,
 ) -> np.ndarray:
-    """
-    Draw ellipse, baseline, tangent lines, dotted arcs, and angle labels
-    onto a copy of the original image.  Matches test2.py _save_result() exactly.
-    """
-    out = image_orig.copy()
-    out = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY)
-    _, out = cv2.threshold(out, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+    """Ellipse, baseline, tangents, dotted arcs and angle labels on a gray copy."""
+    out = cv2.cvtColor(image_orig, cv2.COLOR_BGR2GRAY)
     out = cv2.cvtColor(out, cv2.COLOR_GRAY2BGR)
     h, w = out.shape[:2]
 
-    # ── Baseline ──────────────────────────────────────────────────────────────
     cv2.line(out, (0, baseline_y), (w, baseline_y), (0, 0, 255), 2)
 
-    # ── Ellipse ───────────────────────────────────────────────────────────────
     cx_i, cy_i, a_i, b_i, angle_deg = ellipse
+    ar = np.deg2rad(angle_deg)
     pts = []
     for t in np.linspace(0, 2 * np.pi, 300):
-        ar = np.deg2rad(angle_deg)
         ex = int(cx_i + a_i * np.cos(t) * np.cos(ar) - b_i * np.sin(t) * np.sin(ar))
         ey = int(cy_i + a_i * np.cos(t) * np.sin(ar) + b_i * np.sin(t) * np.cos(ar))
         pts.append([ex, ey])
-    pts_arr = np.array(pts, dtype=np.int32)
-    cv2.polylines(out, [pts_arr], isClosed=True, color=(0, 255, 100), thickness=2)
+    cv2.polylines(out, [np.array(pts, dtype=np.int32)], isClosed=True,
+                  color=(0, 255, 100), thickness=2)
     cv2.circle(out, (int(cx_i), int(cy_i)), 5, (0, 255, 100), -1)
 
-    # ── WCA overlays ──────────────────────────────────────────────────────────
     if wca_result is not None:
         left_wca, right_wca, lpt, rpt, ltangent, rtangent = wca_result
         avg            = (left_wca + right_wca) / 2.0
@@ -351,17 +622,16 @@ def _draw_annotated(
             n_dots  = max(int(arc_len / dot_gap), 2)
             for i in range(n_dots):
                 t   = a0 + (a1 - a0) * i / (n_dots - 1)
-                px2 = int(cx + r * np.cos(t))
-                py2 = int(cy - r * np.sin(t))   # y-flip: image coords
-                cv2.circle(img, (px2, py2), 2, color, -1)
+                cv2.circle(img, (int(cx + r * np.cos(t)), int(cy - r * np.sin(t))),
+                           2, color, -1)
 
         for side, pt, tangent, wca in [
             ("left",  lpt, ltangent, left_wca),
             ("right", rpt, rtangent, right_wca),
         ]:
-            px, py  = int(pt[0]), int(pt[1])
-            dx, dy  = tangent
-            mag     = np.hypot(dx, dy)
+            px, py     = int(pt[0]), int(pt[1])
+            dx, dy     = tangent
+            mag        = np.hypot(dx, dy)
             dx_n, dy_n = dx / mag, dy / mag
 
             cv2.circle(out, (px, py), 5, PURPLE_BGR, -1)
@@ -387,22 +657,26 @@ def _draw_annotated(
             mid_rad = np.radians((arc_s + arc_e) / 2)
             lx2 = int(px + (arc_radius + 18) * np.cos(mid_rad))
             ly2 = int(py - (arc_radius + 18) * np.sin(mid_rad))
-            cv2.putText(out, f"{wca:.1f}",
-                        (lx2 - 15, ly2),
+            cv2.putText(out, f"{wca:.1f}", (lx2 - 15, ly2),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.55, PURPLE_BGR, 2)
 
-        cv2.putText(out, f"WCA avg: {avg:.1f}deg",
-                    (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.9, PURPLE_BGR, 2)
+        cv2.putText(out, f"WCA avg: {avg:.1f}deg", (20, 40),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, PURPLE_BGR, 2)
 
     return out
 
 
-def _classify(avg_angle: float) -> str:
-    if avg_angle > 150:
-        return "Superhydrophobic"
-    if avg_angle > 90:
-        return "Hydrophobic"
-    return "Hydrophilic"
+def _draw_edge_image(gray_adj: np.ndarray, edge_sensitivity: int,
+                     bbox, sub_top: int) -> np.ndarray:
+    """Adjusted image + green edges + ROI box + baseline (what the detector saw)."""
+    out = cv2.cvtColor(gray_adj, cv2.COLOR_GRAY2BGR)
+    out[edge_map(gray_adj, edge_sensitivity) > 0] = (0, 255, 0)
+    h, w = out.shape[:2]
+    cv2.line(out, (0, sub_top), (w, sub_top), (0, 255, 255), 2, cv2.LINE_AA)
+    if bbox is not None:
+        cv2.rectangle(out, (int(bbox[0]), int(bbox[1])), (int(bbox[2]), int(bbox[3])),
+                      (255, 160, 0), 2)
+    return out
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -410,7 +684,6 @@ def _classify(avg_angle: float) -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _load_gray(path: str) -> tuple[np.ndarray, np.ndarray]:
-    """Return (bgr_orig, gray) for the image at path."""
     img = cv2.imread(path)
     if img is None:
         raise ValueError(f"Cannot read image: {path}")
@@ -421,11 +694,48 @@ def _save_webp(img: np.ndarray, path: str, quality: int = 85) -> None:
     cv2.imwrite(path, img, [cv2.IMWRITE_WEBP_QUALITY, quality])
 
 
+def _save_upload(file: UploadFile) -> str:
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file uploaded")
+    ext = os.path.splitext(file.filename)[1] or ".png"
+    path = os.path.join(UPLOAD_DIR, f"{uuid.uuid4()}{ext}")
+    with open(path, "wb") as buf:
+        shutil.copyfileobj(file.file, buf)
+    return path
+
+
+def _saturation_warnings(gray_adj: np.ndarray, bbox, brightness: int,
+                         contrast: float) -> list[str]:
+    roi = gray_adj
+    if bbox is not None:
+        x1, y1, x2, y2 = (int(v) for v in bbox)
+        roi = gray_adj[y1:y2, x1:x2]
+    if roi.size == 0:
+        return []
+    hi = float((roi >= 250).mean())
+    lo = float((roi <= 5).mean())
+    out: list[str] = []
+    if hi > 0.25:
+        out.append(f"{hi * 100:.0f}% of the analysed area is saturated white "
+                   f"(brightness {brightness}, contrast {contrast:.2f}); droplet "
+                   f"edges may be washed out. Lower brightness/contrast.")
+    if lo > 0.40:
+        out.append(f"{lo * 100:.0f}% of the analysed area is crushed to black; "
+                   f"raise brightness or lower contrast.")
+    return out
+
+
+def _resolve_baseline(gray_adj: np.ndarray, baseline_y: int | None) -> tuple[int, float]:
+    h = gray_adj.shape[0]
+    if baseline_y is not None:
+        return int(np.clip(baseline_y, 0, h - 1)), 1.0
+    return auto_find_substrate(gray_adj)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  ROUTES
 # ══════════════════════════════════════════════════════════════════════════════
 
-# ── Web test client ────────────────────────────────────────────────────────────
 @app.get("/")
 async def serve_test_client():
     html = """<!DOCTYPE html>
@@ -462,6 +772,14 @@ async def serve_test_client():
     <div><label>Contrast</label><br><input type="number" id="con" value="1.0" min="0.5" max="3.0" step="0.05"></div>
     <div><label>Edge Sensitivity</label><br><input type="number" id="edge" value="50" min="10" max="150"></div>
     <div><label>Baseline Y (px, optional)</label><br><input type="number" id="by" placeholder="auto"></div>
+  </div>
+
+  <label>Region lock (px or 0-1, optional)</label>
+  <div class="row">
+    <input type="number" id="rx1" placeholder="x1" step="any">
+    <input type="number" id="ry1" placeholder="y1" step="any">
+    <input type="number" id="rx2" placeholder="x2" step="any">
+    <input type="number" id="ry2" placeholder="y2" step="any">
   </div>
 
   <button class="btn" onclick="detectDroplet()">1 — Detect Droplet (→ ellipse)</button>
@@ -505,9 +823,7 @@ function getFile(){
   return f;
 }
 
-async function detectDroplet(){
-  const f = getFile(); if(!f) return;
-  R.innerText = 'Detecting droplet…';
+function baseForm(f){
   const fd = new FormData();
   fd.append('file', f);
   const by = document.getElementById('by').value;
@@ -515,10 +831,19 @@ async function detectDroplet(){
   fd.append('brightness', document.getElementById('bri').value);
   fd.append('contrast', document.getElementById('con').value);
   fd.append('edge_sensitivity', document.getElementById('edge').value);
+  const ids = ['rx1','ry1','rx2','ry2'], keys = ['droplet_x1','droplet_y1','droplet_x2','droplet_y2'];
+  const vals = ids.map(i => document.getElementById(i).value);
+  if(vals.every(v => v !== '')) vals.forEach((v,i)=>fd.append(keys[i], v));
+  return fd;
+}
+
+async function detectDroplet(){
+  const f = getFile(); if(!f) return;
+  R.innerText = 'Detecting droplet…';
   try{
-    const res = await fetch('/detect',{method:'POST',body:fd});
+    const res = await fetch('/detect',{method:'POST',body:baseForm(f)});
     const data = await res.json();
-    R.innerText = 'HTTP '+res.status+'\n\n'+JSON.stringify(data,null,2);
+    R.innerText = 'HTTP '+res.status+'\\n\\n'+JSON.stringify(data,null,2);
     if(res.ok && data.cx != null){
       document.getElementById('ecx').value   = data.cx.toFixed(1);
       document.getElementById('ecy').value   = data.cy.toFixed(1);
@@ -533,23 +858,14 @@ async function detectDroplet(){
 async function computeWCA(){
   const f = getFile(); if(!f) return;
   R.innerText = 'Computing WCA…';
-  const fd = new FormData();
-  fd.append('file', f);
-  const by = document.getElementById('by').value;
-  if(by) fd.append('baseline_y', by);
-  fd.append('brightness', document.getElementById('bri').value);
-  fd.append('contrast', document.getElementById('con').value);
-  fd.append('edge_sensitivity', document.getElementById('edge').value);
-  // ellipse params
-  ['cx','cy','semi_a','semi_b','angle_deg'].forEach((k,i)=>{
-    const ids = ['ecx','ecy','esa','esb','eang'];
-    const v = document.getElementById(ids[i]).value;
-    if(v) fd.append(k, v);
-  });
+  const fd = baseForm(f);
+  const keys = ['cx','cy','semi_a','semi_b','angle_deg'];
+  const ids  = ['ecx','ecy','esa','esb','eang'];
+  keys.forEach((k,i)=>{ const v = document.getElementById(ids[i]).value; if(v) fd.append(k, v); });
   try{
     const res = await fetch('/analyze',{method:'POST',body:fd});
     const data = await res.json();
-    R.innerText = 'HTTP '+res.status+'\n\n'+JSON.stringify(data,null,2);
+    R.innerText = 'HTTP '+res.status+'\\n\\n'+JSON.stringify(data,null,2);
     if(data.annotated_image_path){
       document.getElementById('imgPreview').innerHTML =
         '<img src="'+data.annotated_image_path+'" style="margin-top:8px">';
@@ -564,7 +880,7 @@ async function computeWCA(){
 
 # ── /detect ────────────────────────────────────────────────────────────────────
 @app.post("/detect")
-async def detect_droplet(
+def detect_droplet(
     file: UploadFile = File(...),
     baseline_y:       int   | None = Form(default=None),
     droplet_x1:       float | None = Form(default=None),
@@ -576,51 +892,35 @@ async def detect_droplet(
     edge_sensitivity: int          = Form(default=50),
 ):
     """
-    Step 1 — Detect the droplet and return ellipse parameters.
-
-    The Flutter calibration screen calls this after the user presses
-    "Deteksi Tetesan".  The returned cx/cy/semi_a/semi_b are in image-pixel
-    coordinates so Flutter can overlay and drag the ellipse handles.
+    Step 1 — detect the droplet and return ellipse parameters (pixel coords).
+    With a locked region the fit is constrained to that region.
     """
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="No file uploaded")
-
-    file_ext  = os.path.splitext(file.filename)[1] or ".png"
-    file_id   = str(uuid.uuid4())
-    saved     = os.path.join(UPLOAD_DIR, f"{file_id}{file_ext}")
-
+    saved = _save_upload(file)
     try:
-        with open(saved, "wb") as buf:
-            shutil.copyfileobj(file.file, buf)
-
-        img_orig, gray = _load_gray(saved)
+        _, gray = _load_gray(saved)
         h, w = gray.shape
 
-        # ── 1. Brightness / contrast adjustment ───────────────────────────────
         gray_adj = adjust_brightness_contrast(gray, brightness, contrast)
+        sub_top, baseline_conf = _resolve_baseline(gray_adj, baseline_y)
+        bbox = parse_bbox(droplet_x1, droplet_y1, droplet_x2, droplet_y2, w, h)
 
-        # ── 2. Baseline ───────────────────────────────────────────────────────
-        if baseline_y is not None:
-            sub_top = int(np.clip(baseline_y, 0, h - 1))
-        else:
-            sub_top = find_substrate_top(gray_adj)
+        warnings = _saturation_warnings(gray_adj, bbox, brightness, contrast)
+        if bbox is not None and sub_top <= bbox[1] + 20:
+            warnings.append("Baseline is at/above the top of the locked region; "
+                            "there is no droplet area above it.")
 
-        # ── 3. Detect ellipse ─────────────────────────────────────────────────
-        bbox = None
-        if all(v is not None for v in [droplet_x1, droplet_y1, droplet_x2, droplet_y2]):
-            bbox = (droplet_x1, droplet_y1, droplet_x2, droplet_y2)
-
-        ellipse = detect_droplet_ellipse(gray_adj, sub_top, edge_sensitivity, bbox)
+        ellipse, detect_conf = auto_detect_ellipse(gray_adj, sub_top, edge_sensitivity, bbox)
 
         if ellipse is None:
-            raise HTTPException(
-                status_code=422,
-                detail="No droplet detected. Try adjusting brightness, edge "
-                       "sensitivity, or baseline position.",
-            )
+            detail = ("No droplet detected" +
+                      (" inside the locked region" if bbox is not None else "") +
+                      ". Try adjusting brightness/contrast, edge sensitivity, the "
+                      "region, or the baseline position.")
+            if warnings:
+                detail += " Note: " + " ".join(warnings)
+            raise HTTPException(status_code=422, detail=detail)
 
         cx, cy, semi_a, semi_b, angle_deg = ellipse
-
         return JSONResponse(content={
             "cx":                  cx,
             "cy":                  cy,
@@ -630,8 +930,16 @@ async def detect_droplet(
             "detected_baseline_y": sub_top,
             "image_width":         w,
             "image_height":        h,
+            "confidence":          round(float(detect_conf), 3),
+            "baseline_confidence": round(float(baseline_conf), 3),
+            "roi_locked":          bbox is not None,
+            "bbox_used":           list(bbox) if bbox is not None else None,
+            "warnings":            warnings,
         })
-
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
     finally:
         if os.path.exists(saved):
             os.remove(saved)
@@ -639,86 +947,69 @@ async def detect_droplet(
 
 # ── /analyze ───────────────────────────────────────────────────────────────────
 @app.post("/analyze")
-async def analyze_droplet(
+def analyze_droplet(
     file: UploadFile = File(...),
-    # Baseline
     baseline_y:       int   | None = Form(default=None),
-    # Optional pre-drawn bbox (used to re-detect if no ellipse supplied)
+    # Optional region (pixels OR normalised 0-1) used if no ellipse is supplied
     droplet_x1:       float | None = Form(default=None),
     droplet_y1:       float | None = Form(default=None),
     droplet_x2:       float | None = Form(default=None),
     droplet_y2:       float | None = Form(default=None),
-    # Preprocessing
     brightness:       int          = Form(default=0),
     contrast:         float        = Form(default=1.0),
     edge_sensitivity: int          = Form(default=50),
-    # Explicit ellipse params (from Flutter after user drags handles)
+    # Explicit ellipse (pixels) from the app after the user dragged handles
     cx:               float | None = Form(default=None),
     cy:               float | None = Form(default=None),
     semi_a:           float | None = Form(default=None),
     semi_b:           float | None = Form(default=None),
     angle_deg:        float        = Form(default=0.0),
-    # Legacy fine-tune scalars (kept for backward-compat with old Flutter build)
+    # Legacy fine-tune scalars
     ellipse_scale_a:  float | None = Form(default=None),
     ellipse_scale_b:  float | None = Form(default=None),
     ellipse_angle:    float | None = Form(default=None),
 ):
     """
-    Step 2 — Compute WCA and return angles + annotated image.
+    Step 2 — compute WCA and return angles + annotated image.
 
-    The Flutter "Hitung WCA" button sends the (possibly user-adjusted) ellipse
-    params alongside the image so the server can draw the annotated result.
-
-    If no ellipse params are supplied the server runs auto-detection first
-    (same as /detect), which gives the same result as pressing both buttons
-    in sequence with default settings.
+    Explicit ellipse params are used AS SENT (the app has already applied its
+    scale sliders to them).  ellipse_scale_a/b are applied only when the server
+    has to auto-detect the ellipse itself.
     """
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="No file uploaded")
-
-    file_ext = os.path.splitext(file.filename)[1] or ".png"
-    file_id  = str(uuid.uuid4())
-    saved    = os.path.join(UPLOAD_DIR, f"{file_id}{file_ext}")
-    out_path = os.path.join(UPLOAD_DIR, f"{file_id}_annotated.webp")
+    saved    = _save_upload(file)
+    file_id  = uuid.uuid4()
+    out_path  = os.path.join(UPLOAD_DIR, f"{file_id}_annotated.webp")
+    edge_path = os.path.join(UPLOAD_DIR, f"{file_id}_edges.webp")
 
     try:
-        with open(saved, "wb") as buf:
-            shutil.copyfileobj(file.file, buf)
-
         img_orig, gray = _load_gray(saved)
         h, w = gray.shape
 
-        # ── Preprocessing ─────────────────────────────────────────────────────
         gray_adj = adjust_brightness_contrast(gray, brightness, contrast)
+        sub_top, _ = _resolve_baseline(gray_adj, baseline_y)
+        bbox = parse_bbox(droplet_x1, droplet_y1, droplet_x2, droplet_y2, w, h)
+        warnings = _saturation_warnings(gray_adj, bbox, brightness, contrast)
 
-        # ── Baseline ──────────────────────────────────────────────────────────
-        if baseline_y is not None:
-            sub_top = int(np.clip(baseline_y, 0, h - 1))
-        else:
-            sub_top = find_substrate_top(gray_adj)
-
-        # ── Ellipse ───────────────────────────────────────────────────────────
         if cx is not None and cy is not None and semi_a is not None and semi_b is not None:
-            # Flutter sent explicit params (after user dragged handles)
+            if semi_a <= 0 or semi_b <= 0:
+                raise HTTPException(status_code=422, detail="semi_a and semi_b must be positive.")
             eff_angle = ellipse_angle if ellipse_angle is not None else angle_deg
-            eff_a     = semi_a * (ellipse_scale_a if ellipse_scale_a is not None else 1.0)
-            eff_b     = semi_b * (ellipse_scale_b if ellipse_scale_b is not None else 1.0)
-            ellipse   = [float(cx), float(cy), eff_a, eff_b, eff_angle]
+            ellipse = [float(cx), float(cy), float(semi_a), float(semi_b), float(eff_angle)]
+            method = "ellipse_tangent_manual"
         else:
-            # Auto-detect (fallback / "Hitung WCA" pressed without detection step)
-            bbox = None
-            if all(v is not None for v in [droplet_x1, droplet_y1, droplet_x2, droplet_y2]):
-                bbox = (droplet_x1, droplet_y1, droplet_x2, droplet_y2)
-
-            ellipse = detect_droplet_ellipse(gray_adj, sub_top, edge_sensitivity, bbox)
+            ellipse, _conf = auto_detect_ellipse(gray_adj, sub_top, edge_sensitivity, bbox)
             if ellipse is None:
                 raise HTTPException(
                     status_code=422,
                     detail="No droplet detected. Please use Deteksi Tetesan first "
                            "or adjust preprocessing settings.",
                 )
+            ellipse = [ellipse[0], ellipse[1],
+                       ellipse[2] * (ellipse_scale_a if ellipse_scale_a is not None else 1.0),
+                       ellipse[3] * (ellipse_scale_b if ellipse_scale_b is not None else 1.0),
+                       ellipse_angle if ellipse_angle is not None else ellipse[4]]
+            method = "ellipse_tangent_auto"
 
-        # ── Compute WCA ───────────────────────────────────────────────────────
         wca_result = compute_wca(ellipse, sub_top)
         if wca_result is None:
             raise HTTPException(
@@ -727,38 +1018,35 @@ async def analyze_droplet(
                        "Move the baseline or adjust the ellipse.",
             )
 
-        left_wca, right_wca, lpt, rpt, ltangent, rtangent = wca_result
+        left_wca, right_wca, lpt, rpt, _lt, _rt = wca_result
         avg_angle = (left_wca + right_wca) / 2.0
 
-        # ── Annotated image ───────────────────────────────────────────────────
-        annotated = _draw_annotated(img_orig, ellipse, sub_top, wca_result)
-        _save_webp(annotated, out_path)
+        _save_webp(_draw_annotated(img_orig, ellipse, sub_top, wca_result), out_path)
+        _save_webp(_draw_edge_image(gray_adj, edge_sensitivity, bbox, sub_top),
+                   edge_path, quality=80)
 
         return JSONResponse(content={
-            # Angles
             "left_angle":           left_wca,
             "right_angle":          right_wca,
             "average_angle":        avg_angle,
             "classification":       _classify(avg_angle),
-            # Contact points (pixel coords)
+            "method":               method,
             "contact_left_x":       lpt[0],
             "contact_left_y":       lpt[1],
             "contact_right_x":      rpt[0],
             "contact_right_y":      rpt[1],
-            # Ellipse used (so Flutter can confirm what was computed)
             "ellipse_cx":           ellipse[0],
             "ellipse_cy":           ellipse[1],
             "ellipse_semi_a":       ellipse[2],
             "ellipse_semi_b":       ellipse[3],
             "ellipse_angle_deg":    ellipse[4],
-            # Geometry
             "detected_baseline_y":  sub_top,
             "droplet_width_px":     ellipse[2] * 2,
             "droplet_height_px":    ellipse[3] * 2,
-            # Images
             "annotated_image_path": "/image/" + os.path.basename(out_path),
+            "edge_image_path":      "/image/" + os.path.basename(edge_path),
+            "warnings":             warnings,
         })
-
     except HTTPException:
         raise
     except Exception as exc:
@@ -770,69 +1058,46 @@ async def analyze_droplet(
 
 # ── /preview ───────────────────────────────────────────────────────────────────
 @app.post("/preview")
-async def preview_preprocessing(
+def preview_preprocessing(
     file: UploadFile = File(...),
     brightness:       int          = Form(default=0),
     contrast:         float        = Form(default=1.0),
     edge_sensitivity: int          = Form(default=50),
     sharpness:        int          = Form(default=0),
     baseline_y:       int   | None = Form(default=None),
+    droplet_x1:       float | None = Form(default=None),
+    droplet_y1:       float | None = Form(default=None),
+    droplet_x2:       float | None = Form(default=None),
+    droplet_y2:       float | None = Form(default=None),
 ):
     """
-    Generate a quick preview of preprocessing results (edges + baseline).
-    Used by the Flutter calibration screen as the user moves sliders,
-    so speed matters — returns WebP, no full analysis.
+    Quick preview of what the detector sees: adjusted image, edges (same
+    thresholds as /detect), baseline and the locked region.
     """
-    if sharpness != 0:
+    if sharpness != 0:                      # legacy mapping used by older builds
         edge_sensitivity = int(np.clip(50 + sharpness, 10, 150))
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="No file uploaded")
 
-    file_ext    = os.path.splitext(file.filename)[1] or ".png"
-    file_id     = str(uuid.uuid4())
-    saved       = os.path.join(UPLOAD_DIR, f"{file_id}{file_ext}")
-    preview_out = os.path.join(UPLOAD_DIR, f"{file_id}_preview.webp")
+    saved       = _save_upload(file)
+    preview_out = os.path.join(UPLOAD_DIR, f"{uuid.uuid4()}_preview.webp")
 
     try:
-        with open(saved, "wb") as buf:
-            shutil.copyfileobj(file.file, buf)
-
-        img_orig, gray = _load_gray(saved)
+        _, gray = _load_gray(saved)
         h, w = gray.shape
-
-        # ── Adjust brightness / contrast ──────────────────────────────────────
         gray_adj = adjust_brightness_contrast(gray, brightness, contrast)
 
-        # ── Canny edges ───────────────────────────────────────────────────────
-        canny_low  = max(10, 100 - edge_sensitivity)
-        canny_high = max(20, 200 - edge_sensitivity)
-        edges      = cv2.Canny(gray_adj, canny_low, canny_high)
+        by, _ = _resolve_baseline(gray_adj, baseline_y)
+        bbox = parse_bbox(droplet_x1, droplet_y1, droplet_x2, droplet_y2, w, h)
 
-        # ── Build preview ─────────────────────────────────────────────────────
-        preview_bgr = cv2.cvtColor(gray_adj, cv2.COLOR_GRAY2BGR)
-
-        # Green edge overlay
-        edge_overlay                = np.zeros_like(preview_bgr)
-        edge_overlay[edges > 0]     = (0, 255, 0)
-        preview_bgr = cv2.addWeighted(preview_bgr, 0.75, edge_overlay, 0.25, 0)
-
-        # Baseline
-        if baseline_y is not None:
-            by = int(np.clip(baseline_y, 0, h - 1))
-        else:
-            by = find_substrate_top(gray_adj)
-        cv2.line(preview_bgr, (0, by), (w, by), (0, 255, 255), 2, cv2.LINE_AA)
-        cv2.putText(preview_bgr, "baseline",
-                    (5, max(by - 6, 12)),
+        preview = _draw_edge_image(gray_adj, edge_sensitivity, bbox, by)
+        cv2.putText(preview, "baseline", (5, max(by - 6, 12)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1)
-
-        _save_webp(preview_bgr, preview_out, quality=80)
+        _save_webp(preview, preview_out, quality=80)
 
         return JSONResponse(content={
             "preview_image_path":  "/image/" + os.path.basename(preview_out),
             "detected_baseline_y": by,
+            "warnings":            _saturation_warnings(gray_adj, bbox, brightness, contrast),
         })
-
     except HTTPException:
         raise
     except Exception as exc:
@@ -877,7 +1142,8 @@ if __name__ == "__main__":
 
     port = args.port if args.port is not None else DEFAULT_PORT
 
-    # ── Optional ngrok tunnel ──────────────────────────────────────────────────
+    print(f"[SurfEye] auto_detect.py loaded: {_HAVE_AUTO_DETECT}")
+
     if not args.no_ngrok:
         try:
             from pyngrok import conf, ngrok
